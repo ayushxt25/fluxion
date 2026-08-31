@@ -1,0 +1,44 @@
+class WorkflowValidationError(Exception):
+    """Base exception for invalid workflow definitions."""
+
+
+class EmptyWorkflowError(WorkflowValidationError):
+    def __init__(self, workflow_id: str) -> None:
+        super().__init__(f"Workflow '{workflow_id}' must define at least one task.")
+
+
+class DuplicateTaskError(WorkflowValidationError):
+    def __init__(self, task_id: str) -> None:
+        super().__init__(f"Workflow contains duplicate task id '{task_id}'.")
+
+
+class DuplicateDependencyError(WorkflowValidationError):
+    def __init__(self, task_id: str, dependency_id: str) -> None:
+        super().__init__(
+            f"Task '{task_id}' contains duplicate dependency '{dependency_id}'."
+        )
+
+
+class SelfDependencyError(WorkflowValidationError):
+    def __init__(self, task_id: str) -> None:
+        super().__init__(f"Task '{task_id}' cannot depend on itself.")
+
+
+class UnknownDependencyError(WorkflowValidationError):
+    def __init__(self, task_id: str, dependency_id: str) -> None:
+        super().__init__(
+            f"Task '{task_id}' depends on unknown task '{dependency_id}'."
+        )
+
+
+class CycleDetectedError(WorkflowValidationError):
+    def __init__(self, task_ids: list[str]) -> None:
+        cycle_candidates = ", ".join(sorted(task_ids))
+        super().__init__(
+            f"Workflow contains a cycle involving task ids: {cycle_candidates}."
+        )
+
+
+class UnknownTaskError(WorkflowValidationError):
+    def __init__(self, task_id: str) -> None:
+        super().__init__(f"Workflow does not contain task '{task_id}'.")

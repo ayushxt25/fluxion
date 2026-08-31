@@ -3,8 +3,9 @@
 Fluxion is a Python backend project that will grow into a distributed workflow
 execution engine for DAG-based workflows.
 
-The project is under active development. The current codebase is only the
-initial FastAPI repository foundation and health-check surface.
+The project is under active development. The current codebase includes the
+initial FastAPI repository foundation, health-check surface, workflow/task
+specification models, DAG validation, and deterministic topological ordering.
 
 ## Planned Capabilities
 
@@ -58,5 +59,7 @@ ruff check .
 ## Current Status
 
 Fluxion currently provides a modular async-first FastAPI skeleton, settings
-management, and a health endpoint. Distributed execution features are planned
-but not implemented yet.
+management, a health endpoint, immutable workflow specification models, and a
+validated workflow DAG abstraction. Empty workflows are rejected because a
+workflow with zero executable tasks is not meaningful. Distributed execution
+features are planned but not implemented yet.
