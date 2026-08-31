@@ -83,13 +83,15 @@ class WorkflowRun:
         self._status = WorkflowStatus.RUNNING
 
     def complete_task(self, task_id: str) -> None:
-        self._ensure_workflow_can_advance()
+        workflow_already_failed = self._status == WorkflowStatus.FAILED
+        self._ensure_task_can_finish(task_id)
         self._transition_task(task_id, TaskStatus.SUCCEEDED)
-        self._unlock_ready_dependents(task_id)
+        if not workflow_already_failed:
+            self._unlock_ready_dependents(task_id)
         self._refresh_terminal_status()
 
     def fail_task(self, task_id: str) -> None:
-        self._ensure_workflow_can_advance()
+        self._ensure_task_can_finish(task_id)
         self._transition_task(task_id, TaskStatus.FAILED)
         self._status = WorkflowStatus.FAILED
 
@@ -136,6 +138,9 @@ class WorkflowRun:
                 self._transition_task(dependent_id, TaskStatus.READY)
 
     def _refresh_terminal_status(self) -> None:
+        if self._status == WorkflowStatus.FAILED:
+            return
+
         if all(
             task_run.status == TaskStatus.SUCCEEDED
             for task_run in self._task_runs.values()
@@ -145,6 +150,16 @@ class WorkflowRun:
     def _ensure_workflow_can_advance(self) -> None:
         if self._status.is_terminal:
             raise WorkflowAlreadyTerminalError(self.run_id, self._status)
+
+    def _ensure_task_can_finish(self, task_id: str) -> None:
+        task_run = self._get_task_run(task_id)
+        if (
+            self._status == WorkflowStatus.FAILED
+            and task_run.status == TaskStatus.RUNNING
+        ):
+            return
+
+        self._ensure_workflow_can_advance()
 
     def _get_task_run(self, task_id: str) -> TaskRun:
         try:

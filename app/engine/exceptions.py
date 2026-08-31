@@ -64,3 +64,25 @@ class UnknownTaskRunError(ExecutionStateError):
 class WorkflowAlreadyTerminalError(ExecutionStateError):
     def __init__(self, run_id: str, status: str) -> None:
         super().__init__(f"Workflow run '{run_id}' is already terminal: '{status}'.")
+
+
+class TaskImplementationError(Exception):
+    """Base exception for task implementation registry errors."""
+
+
+class MissingTaskImplementationError(TaskImplementationError):
+    def __init__(self, task_id: str) -> None:
+        super().__init__(f"Task '{task_id}' has no registered implementation.")
+
+
+class DuplicateTaskImplementationError(TaskImplementationError):
+    def __init__(self, task_id: str) -> None:
+        super().__init__(f"Task '{task_id}' already has a registered implementation.")
+
+
+class InvalidConcurrencyLimitError(TaskImplementationError):
+    def __init__(self, max_concurrency: int) -> None:
+        super().__init__(
+            f"Executor max_concurrency must be a positive integer or None; "
+            f"got {max_concurrency}."
+        )
