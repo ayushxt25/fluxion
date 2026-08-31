@@ -5,7 +5,8 @@ execution engine for DAG-based workflows.
 
 The project is under active development. The current codebase includes the
 initial FastAPI repository foundation, health-check surface, workflow/task
-specification models, DAG validation, and deterministic topological ordering.
+specification models, DAG validation, deterministic topological ordering,
+in-memory workflow run state, and dependency-based task readiness transitions.
 
 ## Planned Capabilities
 
@@ -60,6 +61,14 @@ ruff check .
 
 Fluxion currently provides a modular async-first FastAPI skeleton, settings
 management, a health endpoint, immutable workflow specification models, and a
-validated workflow DAG abstraction. Empty workflows are rejected because a
-workflow with zero executable tasks is not meaningful. Distributed execution
-features are planned but not implemented yet.
+validated workflow DAG abstraction. It also tracks in-memory workflow run state
+and task readiness based on completed dependencies. Empty workflows are rejected
+because a workflow with zero executable tasks is not meaningful.
+
+Actual task execution, persistence, distributed workers, scheduling, retries,
+and networked coordination are planned but not implemented yet.
+
+For Phase 2, a failed task or individually cancelled task marks the workflow run
+as failed because successful completion is no longer possible. Explicit workflow
+cancellation marks remaining non-terminal tasks as cancelled and sets the run to
+cancelled.

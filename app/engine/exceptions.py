@@ -42,3 +42,25 @@ class CycleDetectedError(WorkflowValidationError):
 class UnknownTaskError(WorkflowValidationError):
     def __init__(self, task_id: str) -> None:
         super().__init__(f"Workflow does not contain task '{task_id}'.")
+
+
+class ExecutionStateError(Exception):
+    """Base exception for invalid workflow run state operations."""
+
+
+class InvalidTaskTransitionError(ExecutionStateError):
+    def __init__(self, task_id: str, current_status: str, next_status: str) -> None:
+        super().__init__(
+            f"Task '{task_id}' cannot transition from "
+            f"'{current_status}' to '{next_status}'."
+        )
+
+
+class UnknownTaskRunError(ExecutionStateError):
+    def __init__(self, task_id: str) -> None:
+        super().__init__(f"Workflow run does not contain task '{task_id}'.")
+
+
+class WorkflowAlreadyTerminalError(ExecutionStateError):
+    def __init__(self, run_id: str, status: str) -> None:
+        super().__init__(f"Workflow run '{run_id}' is already terminal: '{status}'.")
