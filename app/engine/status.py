@@ -8,6 +8,7 @@ class TaskStatus(StrEnum):
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+    INTERRUPTED = "INTERRUPTED"
 
     @property
     def is_terminal(self) -> bool:
@@ -15,6 +16,7 @@ class TaskStatus(StrEnum):
             TaskStatus.SUCCEEDED,
             TaskStatus.FAILED,
             TaskStatus.CANCELLED,
+            TaskStatus.INTERRUPTED,
         }
 
 

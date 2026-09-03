@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +14,8 @@ from app.db.models.workflow import (
 from app.engine.dag import WorkflowDAG
 from app.engine.exceptions import (
     PersistenceError,
+    RecoveryStateError,
+    UnknownTaskRunError,
     WorkflowAlreadyExistsError,
     WorkflowNotFoundError,
     WorkflowRunAlreadyExistsError,
@@ -20,6 +24,12 @@ from app.engine.exceptions import (
 from app.engine.execution import WorkflowRun
 from app.engine.status import TaskStatus, WorkflowStatus
 from app.schemas.workflow import TaskDefinition, WorkflowDefinition
+
+
+@dataclass(frozen=True)
+class IncompleteWorkflowRunRef:
+    run_id: str
+    workflow_id: str
 
 
 class WorkflowRepository:
@@ -153,14 +163,48 @@ class WorkflowRunRepository:
             if record is None:
                 raise WorkflowRunNotFoundError(run_id)
 
-            return WorkflowRun.restore(
-                run_id=record.run_id,
-                workflow=workflow,
-                status=WorkflowStatus(record.status),
-                task_statuses={
+            try:
+                workflow_status = WorkflowStatus(record.status)
+                task_statuses = {
                     task_run.task_id: TaskStatus(task_run.status)
                     for task_run in record.task_runs
-                },
+                }
+            except ValueError as exc:
+                raise RecoveryStateError(
+                    run_id,
+                    "persisted run contains an unknown workflow or task status.",
+                ) from exc
+
+            try:
+                return WorkflowRun.restore(
+                    run_id=record.run_id,
+                    workflow=workflow,
+                    status=workflow_status,
+                    task_statuses=task_statuses,
+                )
+            except UnknownTaskRunError as exc:
+                raise RecoveryStateError(
+                    run_id,
+                    "persisted task run rows do not match workflow tasks.",
+                ) from exc
+
+    async def list_incomplete(self) -> tuple[IncompleteWorkflowRunRef, ...]:
+        async with self._session.begin():
+            result = await self._session.execute(
+                select(WorkflowRunRecord)
+                .where(
+                    WorkflowRunRecord.status.in_(
+                        (WorkflowStatus.PENDING.value, WorkflowStatus.RUNNING.value)
+                    )
+                )
+                .order_by(WorkflowRunRecord.run_id)
+            )
+            return tuple(
+                IncompleteWorkflowRunRef(
+                    run_id=record.run_id,
+                    workflow_id=record.workflow_id,
+                )
+                for record in result.scalars()
             )
 
     async def save_state(self, workflow_run: WorkflowRun) -> None:

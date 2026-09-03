@@ -10,7 +10,8 @@ in-memory workflow run state, dependency-based task readiness transitions, and
 single-process local asynchronous workflow execution. Fluxion also includes
 PostgreSQL-backed persistence models, repositories, and Alembic migrations for
 workflow definitions, workflow run state, and durable local execution
-transitions.
+transitions. Fluxion can also recover persisted local crash states by marking
+abandoned `RUNNING` tasks as `INTERRUPTED`.
 
 ## Planned Capabilities
 
@@ -81,12 +82,15 @@ Python task callables locally with concurrent execution for independent ready
 tasks and optional local concurrency limiting. Workflow definitions and run/task
 state can be persisted in PostgreSQL through SQLAlchemy repositories and Alembic
 migrations. The local executor can persist task and workflow state transitions
-durably as it runs. Empty workflows are rejected because a workflow with zero
-executable tasks is not meaningful.
+durably as it runs. Recovery can detect stale local `RUNNING` task state after a
+restart and reconcile readiness without executing task callables. Empty
+workflows are rejected because a workflow with zero executable tasks is not
+meaningful.
 
 Execution is currently single-process and local. Distributed workers,
-scheduling services, Redis coordination, automatic crash recovery, and retries
-are not implemented yet.
+scheduling services, Redis coordination, and retries are not implemented yet.
+Interrupted tasks are not retried automatically, and recovery does not guarantee
+exactly-once effects for external side effects performed before a crash.
 
 For Phase 2, a failed task or individually cancelled task marks the workflow run
 as failed because successful completion is no longer possible. Explicit workflow

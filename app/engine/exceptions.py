@@ -117,3 +117,8 @@ class ExecutionPersistenceError(PersistenceError):
         super().__init__(
             f"Failed to durably persist workflow run '{run_id}' during {operation}."
         )
+
+
+class RecoveryStateError(Exception):
+    def __init__(self, run_id: str, message: str) -> None:
+        super().__init__(f"Workflow run '{run_id}' cannot be recovered: {message}")

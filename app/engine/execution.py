@@ -4,6 +4,7 @@ from types import MappingProxyType
 from app.engine.dag import WorkflowDAG
 from app.engine.exceptions import (
     InvalidTaskTransitionError,
+    RecoveryStateError,
     UnknownTaskRunError,
     WorkflowAlreadyTerminalError,
 )
@@ -139,6 +140,91 @@ class WorkflowRun:
                 )
 
         self._status = WorkflowStatus.CANCELLED
+
+    def interrupt_running_tasks_for_recovery(self) -> tuple[str, ...]:
+        if self._status != WorkflowStatus.RUNNING:
+            return ()
+
+        interrupted = tuple(
+            sorted(
+                task_id
+                for task_id, task_run in self._task_runs.items()
+                if task_run.status == TaskStatus.RUNNING
+            )
+        )
+        for task_id in interrupted:
+            self._task_runs[task_id] = TaskRun(
+                task_id=task_id,
+                status=TaskStatus.INTERRUPTED,
+            )
+
+        if interrupted:
+            self._status = WorkflowStatus.FAILED
+
+        return interrupted
+
+    def reconcile_readiness_for_recovery(self) -> None:
+        self._validate_recoverable_state()
+
+        if self._status.is_terminal:
+            return
+
+        for task_id in self._dag.topological_order():
+            task_run = self._task_runs[task_id]
+            if task_run.status.is_terminal or task_run.status == TaskStatus.RUNNING:
+                continue
+
+            next_status = (
+                TaskStatus.READY
+                if all(
+                    self.get_task_status(dependency_id) == TaskStatus.SUCCEEDED
+                    for dependency_id in self._dag.dependencies_of(task_id)
+                )
+                else TaskStatus.BLOCKED
+            )
+            if task_run.status != next_status:
+                self._task_runs[task_id] = TaskRun(
+                    task_id=task_id,
+                    status=next_status,
+                )
+
+    def _validate_recoverable_state(self) -> None:
+        if self._status == WorkflowStatus.PENDING:
+            running_tasks = [
+                task_id
+                for task_id, task_run in self._task_runs.items()
+                if task_run.status == TaskStatus.RUNNING
+            ]
+            if running_tasks:
+                raise RecoveryStateError(
+                    self.run_id,
+                    f"PENDING run has RUNNING tasks: {sorted(running_tasks)}.",
+                )
+
+        if self._status == WorkflowStatus.SUCCEEDED and any(
+            task_run.status != TaskStatus.SUCCEEDED
+            for task_run in self._task_runs.values()
+        ):
+            raise RecoveryStateError(
+                self.run_id,
+                "SUCCEEDED run contains non-SUCCEEDED tasks.",
+            )
+
+        for task_id in self._dag.topological_order():
+            if self.get_task_status(task_id) != TaskStatus.SUCCEEDED:
+                continue
+
+            invalid_dependencies = [
+                dependency_id
+                for dependency_id in self._dag.dependencies_of(task_id)
+                if self.get_task_status(dependency_id) != TaskStatus.SUCCEEDED
+            ]
+            if invalid_dependencies:
+                raise RecoveryStateError(
+                    self.run_id,
+                    f"SUCCEEDED task '{task_id}' has non-SUCCEEDED dependencies: "
+                    f"{sorted(invalid_dependencies)}.",
+                )
 
     def _transition_task(self, task_id: str, next_status: TaskStatus) -> None:
         task_run = self._get_task_run(task_id)
