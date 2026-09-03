@@ -62,40 +62,49 @@ class WorkflowRepository:
             ) from exc
 
     async def get(self, workflow_id: str) -> WorkflowDefinition:
-        result = await self._session.execute(
-            select(WorkflowDefinitionRecord)
-            .where(WorkflowDefinitionRecord.id == workflow_id)
-            .options(selectinload(WorkflowDefinitionRecord.tasks))
-        )
-        record = result.scalar_one_or_none()
-        if record is None:
-            raise WorkflowNotFoundError(workflow_id)
-
-        dependency_result = await self._session.execute(
-            select(TaskDependencyRecord).where(
-                TaskDependencyRecord.workflow_id == workflow_id
+        async with self._session.begin():
+            result = await self._session.execute(
+                select(WorkflowDefinitionRecord)
+                .where(WorkflowDefinitionRecord.id == workflow_id)
+                .options(selectinload(WorkflowDefinitionRecord.tasks))
             )
-        )
-        dependencies: dict[str, list[str]] = {
-            task.task_id: [] for task in record.tasks
-        }
-        for dependency in dependency_result.scalars():
-            dependencies[dependency.task_id].append(dependency.depends_on_task_id)
+            record = result.scalar_one_or_none()
+            if record is None:
+                raise WorkflowNotFoundError(workflow_id)
 
-        workflow = WorkflowDefinition(
-            id=record.id,
-            name=record.name,
-            tasks=tuple(
-                TaskDefinition(
-                    id=task.task_id,
-                    name=task.name,
-                    depends_on=tuple(sorted(dependencies[task.task_id])),
+            dependency_result = await self._session.execute(
+                select(TaskDependencyRecord).where(
+                    TaskDependencyRecord.workflow_id == workflow_id
                 )
-                for task in sorted(record.tasks, key=lambda item: item.task_id)
-            ),
-        )
+            )
+            dependencies: dict[str, list[str]] = {
+                task.task_id: [] for task in record.tasks
+            }
+            for dependency in dependency_result.scalars():
+                dependencies[dependency.task_id].append(dependency.depends_on_task_id)
+
+            workflow = WorkflowDefinition(
+                id=record.id,
+                name=record.name,
+                tasks=tuple(
+                    TaskDefinition(
+                        id=task.task_id,
+                        name=task.name,
+                        depends_on=tuple(sorted(dependencies[task.task_id])),
+                    )
+                    for task in sorted(record.tasks, key=lambda item: item.task_id)
+                ),
+            )
+
         WorkflowDAG(workflow)
         return workflow
+
+    async def exists(self, workflow_id: str) -> bool:
+        async with self._session.begin():
+            return (
+                await self._session.get(WorkflowDefinitionRecord, workflow_id)
+                is not None
+            )
 
 
 class WorkflowRunRepository:
@@ -133,31 +142,33 @@ class WorkflowRunRepository:
             ) from exc
 
     async def get(self, run_id: str, workflow: WorkflowDefinition) -> WorkflowRun:
-        result = await self._session.execute(
-            select(WorkflowRunRecord)
-            .where(WorkflowRunRecord.run_id == run_id)
-            .where(WorkflowRunRecord.workflow_id == workflow.id)
-            .options(selectinload(WorkflowRunRecord.task_runs))
-        )
-        record = result.scalar_one_or_none()
-        if record is None:
-            raise WorkflowRunNotFoundError(run_id)
+        async with self._session.begin():
+            result = await self._session.execute(
+                select(WorkflowRunRecord)
+                .where(WorkflowRunRecord.run_id == run_id)
+                .where(WorkflowRunRecord.workflow_id == workflow.id)
+                .options(selectinload(WorkflowRunRecord.task_runs))
+            )
+            record = result.scalar_one_or_none()
+            if record is None:
+                raise WorkflowRunNotFoundError(run_id)
 
-        return WorkflowRun.restore(
-            run_id=record.run_id,
-            workflow=workflow,
-            status=WorkflowStatus(record.status),
-            task_statuses={
-                task_run.task_id: TaskStatus(task_run.status)
-                for task_run in record.task_runs
-            },
-        )
+            return WorkflowRun.restore(
+                run_id=record.run_id,
+                workflow=workflow,
+                status=WorkflowStatus(record.status),
+                task_statuses={
+                    task_run.task_id: TaskStatus(task_run.status)
+                    for task_run in record.task_runs
+                },
+            )
 
     async def save_state(self, workflow_run: WorkflowRun) -> None:
         async with self._session.begin():
             result = await self._session.execute(
                 select(WorkflowRunRecord)
                 .where(WorkflowRunRecord.run_id == workflow_run.run_id)
+                .where(WorkflowRunRecord.workflow_id == workflow_run.workflow_id)
                 .options(selectinload(WorkflowRunRecord.task_runs))
             )
             record = result.scalar_one_or_none()
@@ -166,5 +177,11 @@ class WorkflowRunRepository:
 
             record.status = workflow_run.status.value
             task_records = {task.task_id: task for task in record.task_runs}
+            if set(task_records) != set(workflow_run.task_runs):
+                raise PersistenceError(
+                    f"Persisted task runs for '{workflow_run.run_id}' do not match "
+                    "the domain workflow run."
+                )
+
             for task_id, task_run in workflow_run.task_runs.items():
                 task_records[task_id].status = task_run.status.value

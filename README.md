@@ -9,7 +9,8 @@ specification models, DAG validation, deterministic topological ordering,
 in-memory workflow run state, dependency-based task readiness transitions, and
 single-process local asynchronous workflow execution. Fluxion also includes
 PostgreSQL-backed persistence models, repositories, and Alembic migrations for
-workflow definitions and workflow run state.
+workflow definitions, workflow run state, and durable local execution
+transitions.
 
 ## Planned Capabilities
 
@@ -79,11 +80,13 @@ and task readiness based on completed dependencies, then can execute registered
 Python task callables locally with concurrent execution for independent ready
 tasks and optional local concurrency limiting. Workflow definitions and run/task
 state can be persisted in PostgreSQL through SQLAlchemy repositories and Alembic
-migrations. Empty workflows are rejected because a workflow with zero executable
-tasks is not meaningful.
+migrations. The local executor can persist task and workflow state transitions
+durably as it runs. Empty workflows are rejected because a workflow with zero
+executable tasks is not meaningful.
 
 Execution is currently single-process and local. Distributed workers,
-scheduling services, Redis coordination, and retries are not implemented yet.
+scheduling services, Redis coordination, automatic crash recovery, and retries
+are not implemented yet.
 
 For Phase 2, a failed task or individually cancelled task marks the workflow run
 as failed because successful completion is no longer possible. Explicit workflow

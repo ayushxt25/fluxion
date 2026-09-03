@@ -110,3 +110,10 @@ class WorkflowRunAlreadyExistsError(PersistenceError):
 class WorkflowRunNotFoundError(PersistenceError):
     def __init__(self, run_id: str) -> None:
         super().__init__(f"Workflow run '{run_id}' was not found.")
+
+
+class ExecutionPersistenceError(PersistenceError):
+    def __init__(self, run_id: str, operation: str) -> None:
+        super().__init__(
+            f"Failed to durably persist workflow run '{run_id}' during {operation}."
+        )
