@@ -86,3 +86,27 @@ class InvalidConcurrencyLimitError(TaskImplementationError):
             f"Executor max_concurrency must be a positive integer or None; "
             f"got {max_concurrency}."
         )
+
+
+class PersistenceError(Exception):
+    """Base exception for persistence-layer failures."""
+
+
+class WorkflowAlreadyExistsError(PersistenceError):
+    def __init__(self, workflow_id: str) -> None:
+        super().__init__(f"Workflow '{workflow_id}' already exists.")
+
+
+class WorkflowNotFoundError(PersistenceError):
+    def __init__(self, workflow_id: str) -> None:
+        super().__init__(f"Workflow '{workflow_id}' was not found.")
+
+
+class WorkflowRunAlreadyExistsError(PersistenceError):
+    def __init__(self, run_id: str) -> None:
+        super().__init__(f"Workflow run '{run_id}' already exists.")
+
+
+class WorkflowRunNotFoundError(PersistenceError):
+    def __init__(self, run_id: str) -> None:
+        super().__init__(f"Workflow run '{run_id}' was not found.")

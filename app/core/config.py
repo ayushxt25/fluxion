@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     app_name: str = "Fluxion"
     app_env: str = "development"
     debug: bool = True
+    database_url: str = "postgresql+asyncpg://fluxion:fluxion@localhost:5432/fluxion"
+    test_database_url: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -7,7 +7,9 @@ The project is under active development. The current codebase includes the
 initial FastAPI repository foundation, health-check surface, workflow/task
 specification models, DAG validation, deterministic topological ordering,
 in-memory workflow run state, dependency-based task readiness transitions, and
-single-process local asynchronous workflow execution.
+single-process local asynchronous workflow execution. Fluxion also includes
+PostgreSQL-backed persistence models, repositories, and Alembic migrations for
+workflow definitions and workflow run state.
 
 ## Planned Capabilities
 
@@ -39,6 +41,16 @@ python -m pip install -e ".[dev]"
 
 Copy `.env.example` to `.env` for local configuration.
 
+For local persistence, create PostgreSQL databases matching your configured
+`DATABASE_URL` and `TEST_DATABASE_URL`, then run:
+
+```bash
+alembic upgrade head
+```
+
+Integration tests require `TEST_DATABASE_URL` and only run against databases
+whose name ends with `_test`.
+
 ## Run The API
 
 ```bash
@@ -65,12 +77,13 @@ management, a health endpoint, immutable workflow specification models, and a
 validated workflow DAG abstraction. It also tracks in-memory workflow run state
 and task readiness based on completed dependencies, then can execute registered
 Python task callables locally with concurrent execution for independent ready
-tasks and optional local concurrency limiting. Empty workflows are rejected
-because a workflow with zero executable tasks is not meaningful.
+tasks and optional local concurrency limiting. Workflow definitions and run/task
+state can be persisted in PostgreSQL through SQLAlchemy repositories and Alembic
+migrations. Empty workflows are rejected because a workflow with zero executable
+tasks is not meaningful.
 
 Execution is currently single-process and local. Distributed workers,
-persistence, scheduling services, retries, and networked coordination are not
-implemented yet.
+scheduling services, Redis coordination, and retries are not implemented yet.
 
 For Phase 2, a failed task or individually cancelled task marks the workflow run
 as failed because successful completion is no longer possible. Explicit workflow

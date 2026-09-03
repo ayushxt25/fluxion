@@ -57,6 +57,33 @@ class WorkflowRun:
     ) -> "WorkflowRun":
         return cls(run_id=run_id, workflow=workflow, dag=dag)
 
+    @classmethod
+    def restore(
+        cls,
+        run_id: str,
+        workflow: WorkflowDefinition,
+        status: WorkflowStatus,
+        task_statuses: dict[str, TaskStatus],
+        dag: WorkflowDAG | None = None,
+    ) -> "WorkflowRun":
+        workflow_dag = dag or WorkflowDAG(workflow)
+        expected_task_ids = set(workflow_dag.topological_order())
+
+        if set(task_statuses) != expected_task_ids:
+            missing = sorted(expected_task_ids - set(task_statuses))
+            extra = sorted(set(task_statuses) - expected_task_ids)
+            raise UnknownTaskRunError(
+                f"invalid restored task state; missing={missing}, extra={extra}"
+            )
+
+        workflow_run = cls(run_id=run_id, workflow=workflow, dag=workflow_dag)
+        workflow_run._status = status
+        workflow_run._task_runs = {
+            task_id: TaskRun(task_id=task_id, status=task_statuses[task_id])
+            for task_id in workflow_dag.topological_order()
+        }
+        return workflow_run
+
     @property
     def status(self) -> WorkflowStatus:
         return self._status
