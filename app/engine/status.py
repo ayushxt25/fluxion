@@ -4,6 +4,7 @@ from enum import StrEnum
 class TaskStatus(StrEnum):
     BLOCKED = "BLOCKED"
     READY = "READY"
+    RETRY_WAITING = "RETRY_WAITING"
     RUNNING = "RUNNING"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
@@ -33,4 +34,21 @@ class WorkflowStatus(StrEnum):
             WorkflowStatus.SUCCEEDED,
             WorkflowStatus.FAILED,
             WorkflowStatus.CANCELLED,
+        }
+
+
+class AttemptStatus(StrEnum):
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    INTERRUPTED = "INTERRUPTED"
+    CANCELLED = "CANCELLED"
+
+    @property
+    def is_terminal(self) -> bool:
+        return self in {
+            AttemptStatus.SUCCEEDED,
+            AttemptStatus.FAILED,
+            AttemptStatus.INTERRUPTED,
+            AttemptStatus.CANCELLED,
         }

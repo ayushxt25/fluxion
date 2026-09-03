@@ -1,6 +1,14 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, ForeignKeyConstraint, String, func
+from sqlalchemy import (
+    DateTime,
+    Float,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Integer,
+    String,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -34,6 +42,18 @@ class TaskDefinitionRecord(Base):
     )
     task_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    retry_max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    retry_initial_backoff_seconds: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=0.0,
+    )
+    retry_backoff_multiplier: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        default=2.0,
+    )
+    retry_max_backoff_seconds: Mapped[float | None] = mapped_column(Float)
 
     workflow: Mapped[WorkflowDefinitionRecord] = relationship(back_populates="tasks")
 

@@ -1,11 +1,12 @@
 from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.models.execution import TaskRunRecord, WorkflowRunRecord
+from app.db.models.execution import TaskAttemptRecord, TaskRunRecord, WorkflowRunRecord
 from app.db.models.workflow import (
     TaskDefinitionRecord,
     TaskDependencyRecord,
@@ -21,9 +22,9 @@ from app.engine.exceptions import (
     WorkflowRunAlreadyExistsError,
     WorkflowRunNotFoundError,
 )
-from app.engine.execution import WorkflowRun
-from app.engine.status import TaskStatus, WorkflowStatus
-from app.schemas.workflow import TaskDefinition, WorkflowDefinition
+from app.engine.execution import TaskAttempt, WorkflowRun
+from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
+from app.schemas.workflow import RetryPolicy, TaskDefinition, WorkflowDefinition
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,16 @@ class WorkflowRepository:
                         workflow_id=workflow.id,
                         task_id=task.id,
                         name=task.name,
+                        retry_max_attempts=task.retry_policy.max_attempts,
+                        retry_initial_backoff_seconds=(
+                            task.retry_policy.initial_backoff_seconds
+                        ),
+                        retry_backoff_multiplier=(
+                            task.retry_policy.backoff_multiplier
+                        ),
+                        retry_max_backoff_seconds=(
+                            task.retry_policy.max_backoff_seconds
+                        ),
                     )
                     for task in workflow.tasks
                 ]
@@ -101,6 +112,14 @@ class WorkflowRepository:
                         id=task.task_id,
                         name=task.name,
                         depends_on=tuple(sorted(dependencies[task.task_id])),
+                        retry_policy=RetryPolicy(
+                            max_attempts=task.retry_max_attempts,
+                            initial_backoff_seconds=(
+                                task.retry_initial_backoff_seconds
+                            ),
+                            backoff_multiplier=task.retry_backoff_multiplier,
+                            max_backoff_seconds=task.retry_max_backoff_seconds,
+                        ),
                     )
                     for task in sorted(record.tasks, key=lambda item: item.task_id)
                 ),
@@ -142,6 +161,7 @@ class WorkflowRunRepository:
                             workflow_id=workflow_run.workflow_id,
                             task_id=task_id,
                             status=task_run.status.value,
+                            next_retry_at=task_run.next_retry_at,
                         )
                         for task_id, task_run in workflow_run.task_runs.items()
                     ]
@@ -169,6 +189,10 @@ class WorkflowRunRepository:
                     task_run.task_id: TaskStatus(task_run.status)
                     for task_run in record.task_runs
                 }
+                next_retry_at = {
+                    task_run.task_id: task_run.next_retry_at
+                    for task_run in record.task_runs
+                }
             except ValueError as exc:
                 raise RecoveryStateError(
                     run_id,
@@ -181,6 +205,7 @@ class WorkflowRunRepository:
                     workflow=workflow,
                     status=workflow_status,
                     task_statuses=task_statuses,
+                    next_retry_at=next_retry_at,
                 )
             except UnknownTaskRunError as exc:
                 raise RecoveryStateError(
@@ -241,3 +266,157 @@ class WorkflowRunRepository:
 
             for task_id, task_run in workflow_run.task_runs.items():
                 task_records[task_id].status = task_run.status.value
+                task_records[task_id].next_retry_at = task_run.next_retry_at
+
+
+class TaskAttemptRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def next_attempt_number(self, run_id: str, task_id: str) -> int:
+        attempts = await self.list_attempts(run_id, task_id)
+        if not attempts:
+            return 1
+        return attempts[-1].attempt_number + 1
+
+    async def create_running_attempt(
+        self,
+        workflow_run: WorkflowRun,
+        task_id: str,
+        attempt_number: int,
+        started_at: datetime,
+    ) -> TaskAttempt:
+        attempt = TaskAttempt(
+            run_id=workflow_run.run_id,
+            workflow_id=workflow_run.workflow_id,
+            task_id=task_id,
+            attempt_number=attempt_number,
+            status=AttemptStatus.RUNNING,
+            started_at=started_at,
+        )
+        async with self._session.begin():
+            await self._save_workflow_state(workflow_run)
+            self._session.add(
+                TaskAttemptRecord(
+                    run_id=attempt.run_id,
+                    workflow_id=attempt.workflow_id,
+                    task_id=attempt.task_id,
+                    attempt_number=attempt.attempt_number,
+                    status=attempt.status.value,
+                    started_at=attempt.started_at,
+                )
+            )
+        return attempt
+
+    async def finish_attempt(
+        self,
+        workflow_run: WorkflowRun,
+        attempt: TaskAttempt,
+        status: AttemptStatus,
+        finished_at: datetime,
+        *,
+        error_type: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        async with self._session.begin():
+            await self._save_workflow_state(workflow_run)
+            record = await self._session.get(
+                TaskAttemptRecord,
+                (attempt.run_id, attempt.task_id, attempt.attempt_number),
+            )
+            if record is None:
+                raise PersistenceError(
+                    f"Task attempt '{attempt.attempt_key}' was not found."
+                )
+            record.status = status.value
+            record.finished_at = finished_at
+            record.error_type = error_type
+            record.error_message = error_message
+
+    async def list_attempts(
+        self,
+        run_id: str,
+        task_id: str,
+    ) -> tuple[TaskAttempt, ...]:
+        async with self._session.begin():
+            result = await self._session.execute(
+                select(TaskAttemptRecord)
+                .where(TaskAttemptRecord.run_id == run_id)
+                .where(TaskAttemptRecord.task_id == task_id)
+                .order_by(TaskAttemptRecord.attempt_number)
+            )
+            return tuple(
+                TaskAttempt(
+                    run_id=record.run_id,
+                    workflow_id=record.workflow_id,
+                    task_id=record.task_id,
+                    attempt_number=record.attempt_number,
+                    status=AttemptStatus(record.status),
+                    started_at=record.started_at,
+                    finished_at=record.finished_at,
+                    error_type=record.error_type,
+                    error_message=record.error_message,
+                )
+                for record in result.scalars()
+            )
+
+    async def list_run_attempts(self, run_id: str) -> tuple[TaskAttempt, ...]:
+        async with self._session.begin():
+            result = await self._session.execute(
+                select(TaskAttemptRecord)
+                .where(TaskAttemptRecord.run_id == run_id)
+                .order_by(TaskAttemptRecord.task_id, TaskAttemptRecord.attempt_number)
+            )
+            return tuple(
+                TaskAttempt(
+                    run_id=record.run_id,
+                    workflow_id=record.workflow_id,
+                    task_id=record.task_id,
+                    attempt_number=record.attempt_number,
+                    status=AttemptStatus(record.status),
+                    started_at=record.started_at,
+                    finished_at=record.finished_at,
+                    error_type=record.error_type,
+                    error_message=record.error_message,
+                )
+                for record in result.scalars()
+            )
+
+    async def interrupt_running_attempts(
+        self,
+        workflow_run: WorkflowRun,
+        finished_at: datetime,
+    ) -> None:
+        async with self._session.begin():
+            await self._save_workflow_state(workflow_run)
+            result = await self._session.execute(
+                select(TaskAttemptRecord)
+                .where(TaskAttemptRecord.run_id == workflow_run.run_id)
+                .where(TaskAttemptRecord.status == AttemptStatus.RUNNING.value)
+            )
+            for record in result.scalars():
+                record.status = AttemptStatus.INTERRUPTED.value
+                record.finished_at = finished_at
+
+    async def _save_workflow_state(self, workflow_run: WorkflowRun) -> None:
+        result = await self._session.execute(
+            select(WorkflowRunRecord)
+            .where(WorkflowRunRecord.run_id == workflow_run.run_id)
+            .where(WorkflowRunRecord.workflow_id == workflow_run.workflow_id)
+            .options(selectinload(WorkflowRunRecord.task_runs))
+        )
+        record = result.scalar_one_or_none()
+        if record is None:
+            raise WorkflowRunNotFoundError(workflow_run.run_id)
+
+        record.status = workflow_run.status.value
+        task_records = {task.task_id: task for task in record.task_runs}
+        if set(task_records) != set(workflow_run.task_runs):
+            raise PersistenceError(
+                f"Persisted task runs for '{workflow_run.run_id}' do not match "
+                "the domain workflow run."
+            )
+
+        for task_id, task_run in workflow_run.task_runs.items():
+            task_records[task_id].status = task_run.status.value
+            task_records[task_id].next_retry_at = task_run.next_retry_at

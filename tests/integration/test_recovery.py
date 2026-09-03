@@ -16,19 +16,28 @@ if not test_database_name.endswith("_test"):
 
 # ruff: noqa: E402
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db import models  # noqa: F401
 from app.db.base import Base
-from app.db.models.execution import TaskRunRecord, WorkflowRunRecord
+from app.db.models.execution import (
+    TaskAttemptRecord,
+    TaskRunRecord,
+    WorkflowRunRecord,
+)
 from app.engine.exceptions import RecoveryStateError
 from app.engine.execution import WorkflowRun
-from app.engine.status import TaskStatus, WorkflowStatus
+from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
 from app.schemas.workflow import TaskDefinition, WorkflowDefinition
 from app.services.recovery import WorkflowRecoveryService
-from app.services.repositories import WorkflowRepository, WorkflowRunRepository
+from app.services.repositories import (
+    TaskAttemptRepository,
+    WorkflowRepository,
+    WorkflowRunRepository,
+)
 
 
 def task(task_id: str, depends_on: tuple[str, ...] = ()) -> TaskDefinition:
@@ -64,6 +73,29 @@ async def save_run(session, definition, workflow_run) -> None:
     await WorkflowRunRepository(session).create(workflow_run)
 
 
+async def add_attempt(
+    session,
+    definition,
+    run_id: str,
+    task_id: str,
+    status: AttemptStatus,
+) -> None:
+    started_at = datetime.now(UTC) - timedelta(seconds=1)
+    finished_at = None if status == AttemptStatus.RUNNING else datetime.now(UTC)
+    async with session.begin():
+        session.add(
+            TaskAttemptRecord(
+                run_id=run_id,
+                workflow_id=definition.id,
+                task_id=task_id,
+                attempt_number=1,
+                status=status.value,
+                started_at=started_at,
+                finished_at=finished_at,
+            )
+        )
+
+
 def test_pending_run_remains_resumable_and_persisted() -> None:
     async def body(session):
         definition = workflow("wf-pending", task("a"), task("b", ("a",)))
@@ -95,6 +127,8 @@ def test_stale_running_task_is_interrupted_and_saved_atomically() -> None:
             task_statuses={"a": TaskStatus.SUCCEEDED, "b": TaskStatus.RUNNING},
         )
         await save_run(session, definition, workflow_run)
+        await add_attempt(session, definition, "run-1", "a", AttemptStatus.SUCCEEDED)
+        await add_attempt(session, definition, "run-1", "b", AttemptStatus.RUNNING)
 
         result = await WorkflowRecoveryService(
             WorkflowRepository(session),
@@ -107,6 +141,8 @@ def test_stale_running_task_is_interrupted_and_saved_atomically() -> None:
         assert loaded.status == WorkflowStatus.FAILED
         assert loaded.get_task_status("a") == TaskStatus.SUCCEEDED
         assert loaded.get_task_status("b") == TaskStatus.INTERRUPTED
+        attempts = await TaskAttemptRepository(session).list_attempts("run-1", "b")
+        assert attempts[-1].status == AttemptStatus.INTERRUPTED
 
     run_in_db(body)
 
@@ -130,6 +166,8 @@ def test_multiple_running_tasks_and_disconnected_graph_recover() -> None:
             },
         )
         await save_run(session, definition, workflow_run)
+        await add_attempt(session, definition, "run-1", "a", AttemptStatus.RUNNING)
+        await add_attempt(session, definition, "run-1", "b", AttemptStatus.RUNNING)
 
         result = await WorkflowRecoveryService(
             WorkflowRepository(session),
@@ -138,6 +176,10 @@ def test_multiple_running_tasks_and_disconnected_graph_recover() -> None:
 
         assert result.interrupted_task_ids == ("a", "b")
         assert result.task_statuses["c"] == TaskStatus.BLOCKED
+        a_attempts = await TaskAttemptRepository(session).list_attempts("run-1", "a")
+        b_attempts = await TaskAttemptRepository(session).list_attempts("run-1", "b")
+        assert a_attempts[-1].status == AttemptStatus.INTERRUPTED
+        assert b_attempts[-1].status == AttemptStatus.INTERRUPTED
 
     run_in_db(body)
 
@@ -152,6 +194,7 @@ def test_running_workflow_without_running_tasks_is_resumable() -> None:
             task_statuses={"a": TaskStatus.SUCCEEDED, "b": TaskStatus.READY},
         )
         await save_run(session, definition, workflow_run)
+        await add_attempt(session, definition, "run-1", "a", AttemptStatus.SUCCEEDED)
 
         result = await WorkflowRecoveryService(
             WorkflowRepository(session),
@@ -161,6 +204,26 @@ def test_running_workflow_without_running_tasks_is_resumable() -> None:
         assert result.resumable is True
         assert result.recovered_status == WorkflowStatus.RUNNING
         assert result.interrupted_task_ids == ()
+
+    run_in_db(body)
+
+
+def test_running_task_without_running_attempt_is_rejected() -> None:
+    async def body(session):
+        definition = workflow("wf-missing-running-attempt", task("a"))
+        workflow_run = WorkflowRun.restore(
+            run_id="run-1",
+            workflow=definition,
+            status=WorkflowStatus.RUNNING,
+            task_statuses={"a": TaskStatus.RUNNING},
+        )
+        await save_run(session, definition, workflow_run)
+
+        with pytest.raises(RecoveryStateError):
+            await WorkflowRecoveryService(
+                WorkflowRepository(session),
+                WorkflowRunRepository(session),
+            ).recover_run("run-1", "wf-missing-running-attempt")
 
     run_in_db(body)
 
@@ -186,6 +249,7 @@ def test_list_incomplete_is_deterministic_and_excludes_terminal_runs() -> None:
         await repository.create(pending)
         await repository.create(running)
         await repository.create(succeeded)
+        await add_attempt(session, definition, "c-run", "a", AttemptStatus.SUCCEEDED)
 
         refs = await repository.list_incomplete()
 
@@ -204,6 +268,7 @@ def test_recovery_is_idempotent_after_interruption() -> None:
             task_statuses={"a": TaskStatus.RUNNING},
         )
         await save_run(session, definition, workflow_run)
+        await add_attempt(session, definition, "run-1", "a", AttemptStatus.RUNNING)
         service = WorkflowRecoveryService(
             WorkflowRepository(session),
             WorkflowRunRepository(session),
@@ -294,6 +359,7 @@ def test_separate_runs_recover_independently() -> None:
         repository = WorkflowRunRepository(session)
         await repository.create(first)
         await repository.create(second)
+        await add_attempt(session, definition, "run-1", "a", AttemptStatus.RUNNING)
 
         results = await WorkflowRecoveryService(
             WorkflowRepository(session),

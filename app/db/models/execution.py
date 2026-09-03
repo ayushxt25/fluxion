@@ -4,6 +4,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     String,
     UniqueConstraint,
     func,
@@ -53,14 +54,61 @@ class TaskRunRecord(Base):
             ["task_definitions.workflow_id", "task_definitions.task_id"],
             ondelete="RESTRICT",
         ),
+        UniqueConstraint(
+            "run_id",
+            "workflow_id",
+            "task_id",
+            name="uq_task_runs_run_workflow_task",
+        ),
     )
 
     run_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
     task_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     workflow_run: Mapped[WorkflowRunRecord] = relationship(
         back_populates="task_runs",
         foreign_keys=[run_id, workflow_id],
     )
+
+
+class TaskAttemptRecord(Base):
+    __tablename__ = "task_attempts"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["run_id", "workflow_id", "task_id"],
+            ["task_runs.run_id", "task_runs.workflow_id", "task_runs.task_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "run_id",
+            "task_id",
+            "attempt_number",
+            name="uq_task_attempts_run_task_attempt",
+        ),
+        Index("ix_task_attempts_run_task", "run_id", "task_id"),
+    )
+
+    run_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    task_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    attempt_number: Mapped[int] = mapped_column(primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_type: Mapped[str | None] = mapped_column(String(255))
+    error_message: Mapped[str | None] = mapped_column(String(1024))
+
+
+Index(
+    "ix_task_runs_status_next_retry_at",
+    TaskRunRecord.status,
+    TaskRunRecord.next_retry_at,
+)

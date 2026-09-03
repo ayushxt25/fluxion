@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from types import MappingProxyType
 
 from app.engine.dag import WorkflowDAG
@@ -8,7 +9,7 @@ from app.engine.exceptions import (
     UnknownTaskRunError,
     WorkflowAlreadyTerminalError,
 )
-from app.engine.status import TaskStatus, WorkflowStatus
+from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
 from app.schemas.workflow import WorkflowDefinition
 
 _VALID_TASK_TRANSITIONS = {
@@ -18,7 +19,9 @@ _VALID_TASK_TRANSITIONS = {
         TaskStatus.SUCCEEDED,
         TaskStatus.FAILED,
         TaskStatus.CANCELLED,
+        TaskStatus.RETRY_WAITING,
     },
+    TaskStatus.RETRY_WAITING: {TaskStatus.READY, TaskStatus.CANCELLED},
 }
 
 
@@ -26,6 +29,24 @@ _VALID_TASK_TRANSITIONS = {
 class TaskRun:
     task_id: str
     status: TaskStatus
+    next_retry_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class TaskAttempt:
+    run_id: str
+    workflow_id: str
+    task_id: str
+    attempt_number: int
+    status: AttemptStatus
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    error_type: str | None = None
+    error_message: str | None = None
+
+    @property
+    def attempt_key(self) -> str:
+        return f"{self.run_id}:{self.task_id}:{self.attempt_number}"
 
 
 class WorkflowRun:
@@ -65,6 +86,7 @@ class WorkflowRun:
         workflow: WorkflowDefinition,
         status: WorkflowStatus,
         task_statuses: dict[str, TaskStatus],
+        next_retry_at: dict[str, datetime | None] | None = None,
         dag: WorkflowDAG | None = None,
     ) -> "WorkflowRun":
         workflow_dag = dag or WorkflowDAG(workflow)
@@ -80,7 +102,11 @@ class WorkflowRun:
         workflow_run = cls(run_id=run_id, workflow=workflow, dag=workflow_dag)
         workflow_run._status = status
         workflow_run._task_runs = {
-            task_id: TaskRun(task_id=task_id, status=task_statuses[task_id])
+            task_id: TaskRun(
+                task_id=task_id,
+                status=task_statuses[task_id],
+                next_retry_at=(next_retry_at or {}).get(task_id),
+            )
             for task_id in workflow_dag.topological_order()
         }
         return workflow_run
@@ -123,6 +149,17 @@ class WorkflowRun:
         self._transition_task(task_id, TaskStatus.FAILED)
         self._status = WorkflowStatus.FAILED
 
+    def schedule_retry(self, task_id: str, next_retry_at: datetime) -> None:
+        self._ensure_task_can_finish(task_id)
+        self._transition_task(
+            task_id,
+            TaskStatus.RETRY_WAITING,
+            next_retry_at=next_retry_at,
+        )
+
+    def make_retry_ready(self, task_id: str) -> None:
+        self._transition_task(task_id, TaskStatus.READY, next_retry_at=None)
+
     def cancel_task(self, task_id: str) -> None:
         self._ensure_workflow_can_advance()
         self._transition_task(task_id, TaskStatus.CANCELLED)
@@ -163,7 +200,7 @@ class WorkflowRun:
 
         return interrupted
 
-    def reconcile_readiness_for_recovery(self) -> None:
+    def reconcile_readiness_for_recovery(self, now: datetime | None = None) -> None:
         self._validate_recoverable_state()
 
         if self._status.is_terminal:
@@ -173,6 +210,14 @@ class WorkflowRun:
             task_run = self._task_runs[task_id]
             if task_run.status.is_terminal or task_run.status == TaskStatus.RUNNING:
                 continue
+            if task_run.status == TaskStatus.RETRY_WAITING:
+                if task_run.next_retry_at is None:
+                    raise RecoveryStateError(
+                        self.run_id,
+                        f"RETRY_WAITING task '{task_id}' has no next_retry_at.",
+                    )
+                if now is None or task_run.next_retry_at > now:
+                    continue
 
             next_status = (
                 TaskStatus.READY
@@ -186,6 +231,7 @@ class WorkflowRun:
                 self._task_runs[task_id] = TaskRun(
                     task_id=task_id,
                     status=next_status,
+                    next_retry_at=None,
                 )
 
     def _validate_recoverable_state(self) -> None:
@@ -239,7 +285,12 @@ class WorkflowRun:
                     f"{sorted(invalid_dependencies)}.",
                 )
 
-    def _transition_task(self, task_id: str, next_status: TaskStatus) -> None:
+    def _transition_task(
+        self,
+        task_id: str,
+        next_status: TaskStatus,
+        next_retry_at: datetime | None = None,
+    ) -> None:
         task_run = self._get_task_run(task_id)
         allowed = _VALID_TASK_TRANSITIONS.get(task_run.status, set())
 
@@ -249,6 +300,7 @@ class WorkflowRun:
         self._task_runs[task_id] = TaskRun(
             task_id=task_id,
             status=next_status,
+            next_retry_at=next_retry_at,
         )
 
     def _unlock_ready_dependents(self, task_id: str) -> None:

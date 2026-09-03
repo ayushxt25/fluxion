@@ -16,19 +16,24 @@ if not test_database_name.endswith("_test"):
 
 # ruff: noqa: E402
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db import models  # noqa: F401
 from app.db.base import Base
-from app.db.models.execution import TaskRunRecord, WorkflowRunRecord
+from app.db.models.execution import (
+    TaskAttemptRecord,
+    TaskRunRecord,
+    WorkflowRunRecord,
+)
 from app.engine.exceptions import (
     MissingTaskImplementationError,
     WorkflowRunNotResumableError,
 )
 from app.engine.execution import WorkflowRun
-from app.engine.status import TaskStatus, WorkflowStatus
+from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
 from app.schemas.workflow import TaskDefinition, WorkflowDefinition
 from app.services.repositories import WorkflowRepository, WorkflowRunRepository
 from app.services.resume import WorkflowResumeService
@@ -67,6 +72,29 @@ async def save_run(session, definition, workflow_run) -> None:
     await WorkflowRunRepository(session).create(workflow_run)
 
 
+async def add_attempt(
+    session,
+    definition,
+    run_id: str,
+    task_id: str,
+    status: AttemptStatus,
+) -> None:
+    started_at = datetime.now(UTC) - timedelta(seconds=1)
+    finished_at = None if status == AttemptStatus.RUNNING else datetime.now(UTC)
+    async with session.begin():
+        session.add(
+            TaskAttemptRecord(
+                run_id=run_id,
+                workflow_id=definition.id,
+                task_id=task_id,
+                attempt_number=1,
+                status=status.value,
+                started_at=started_at,
+                finished_at=finished_at,
+            )
+        )
+
+
 async def row_count(session, model) -> int:
     async with session.begin():
         return await session.scalar(select(func.count()).select_from(model))
@@ -101,6 +129,7 @@ def test_resume_running_ready_task_does_not_rerun_succeeded_task() -> None:
             task_statuses={"a": TaskStatus.SUCCEEDED, "b": TaskStatus.READY},
         )
         await save_run(session, definition, workflow_run)
+        await add_attempt(session, definition, "run-1", "a", AttemptStatus.SUCCEEDED)
         calls = []
 
         result = await WorkflowResumeService(
@@ -139,6 +168,7 @@ def test_resume_diamond_and_disconnected_components() -> None:
             },
         )
         await save_run(session, definition, workflow_run)
+        await add_attempt(session, definition, "run-1", "a", AttemptStatus.SUCCEEDED)
         implementations = {
             task_id: lambda: None for task_id in ("b", "c", "d", "x", "y")
         }
@@ -193,6 +223,20 @@ def test_resume_rejects_terminal_and_interrupted_runs() -> None:
         )
         await save_run(session, succeeded_def, succeeded_run)
         await save_run(session, interrupted_def, interrupted_run)
+        await add_attempt(
+            session,
+            succeeded_def,
+            "succeeded",
+            "a",
+            AttemptStatus.SUCCEEDED,
+        )
+        await add_attempt(
+            session,
+            interrupted_def,
+            "interrupted",
+            "a",
+            AttemptStatus.INTERRUPTED,
+        )
         service = WorkflowResumeService(
             WorkflowRepository(session),
             WorkflowRunRepository(session),
@@ -216,6 +260,7 @@ def test_stale_running_task_is_recovered_then_resume_rejected() -> None:
             task_statuses={"a": TaskStatus.RUNNING},
         )
         await save_run(session, definition, workflow_run)
+        await add_attempt(session, definition, "run-1", "a", AttemptStatus.RUNNING)
         calls = []
 
         with pytest.raises(WorkflowRunNotResumableError):

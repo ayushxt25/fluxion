@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime
 
 import pytest
 
@@ -10,6 +11,7 @@ from app.engine.exceptions import (
 from app.engine.execution import WorkflowRun
 from app.engine.status import TaskStatus, WorkflowStatus
 from app.schemas.workflow import TaskDefinition, WorkflowDefinition
+from app.services.execution import _InMemoryTaskAttemptRepository
 from app.services.repositories import IncompleteWorkflowRunRef
 from app.services.resume import WorkflowResumeService
 
@@ -173,10 +175,13 @@ def test_stale_running_task_is_recovered_then_resume_rejected() -> None:
         )
         calls = []
         repository = FakeRunRepository(run)
+        attempts = _InMemoryTaskAttemptRepository(repository)
+        await attempts.create_running_attempt(run, "a", 1, datetime.now(UTC))
         with pytest.raises(WorkflowRunNotResumableError):
             await WorkflowResumeService(
                 FakeWorkflowRepository(definition),
                 repository,
+                attempts,
             ).resume_run("run-1", {"a": lambda: calls.append("a")})
         return calls, repository.workflow_run.get_task_status("a")
 

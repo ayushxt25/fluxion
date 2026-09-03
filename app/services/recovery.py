@@ -1,9 +1,15 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from types import MappingProxyType
 
+from app.engine.exceptions import RecoveryStateError
 from app.engine.status import TaskStatus, WorkflowStatus
-from app.services.repositories import WorkflowRepository, WorkflowRunRepository
+from app.services.repositories import (
+    TaskAttemptRepository,
+    WorkflowRepository,
+    WorkflowRunRepository,
+)
 
 _NON_RESUMABLE_TASK_STATUSES = {
     TaskStatus.RUNNING,
@@ -41,9 +47,15 @@ class WorkflowRecoveryService:
         self,
         workflow_repository: WorkflowRepository,
         run_repository: WorkflowRunRepository,
+        attempt_repository: TaskAttemptRepository | None = None,
     ) -> None:
         self._workflow_repository = workflow_repository
         self._run_repository = run_repository
+        self._attempt_repository = attempt_repository or (
+            TaskAttemptRepository(run_repository._session)
+            if hasattr(run_repository, "_session")
+            else None
+        )
 
     async def recover_incomplete_runs(self) -> tuple[WorkflowRecoveryResult, ...]:
         incomplete_runs = await self._run_repository.list_incomplete()
@@ -65,12 +77,18 @@ class WorkflowRecoveryService:
         workflow = await self._workflow_repository.get(workflow_id)
         workflow_run = await self._run_repository.get(run_id, workflow)
         previous_status = workflow_run.status
+        now = datetime.now(UTC)
 
-        workflow_run.reconcile_readiness_for_recovery()
+        if self._attempt_repository is not None:
+            await self._validate_attempts(workflow_run)
+        workflow_run.reconcile_readiness_for_recovery(now)
         interrupted_task_ids = workflow_run.interrupt_running_tasks_for_recovery()
-        workflow_run.reconcile_readiness_for_recovery()
+        workflow_run.reconcile_readiness_for_recovery(now)
 
-        await self._run_repository.save_state(workflow_run)
+        if interrupted_task_ids and self._attempt_repository is not None:
+            await self._attempt_repository.interrupt_running_attempts(workflow_run, now)
+        else:
+            await self._run_repository.save_state(workflow_run)
 
         task_statuses = {
             task_id: task_run.status
@@ -92,3 +110,42 @@ class WorkflowRecoveryService:
                 )
             ),
         )
+
+    async def _validate_attempts(self, workflow_run) -> None:
+        attempts = await self._attempt_repository.list_run_attempts(workflow_run.run_id)
+        by_task: dict[str, list] = {task_id: [] for task_id in workflow_run.task_runs}
+        for attempt in attempts:
+            if attempt.task_id not in by_task:
+                raise RecoveryStateError(
+                    workflow_run.run_id,
+                    f"attempt references unknown task '{attempt.task_id}'.",
+                )
+            by_task[attempt.task_id].append(attempt)
+
+        for task_id, task_attempts in by_task.items():
+            numbers = [attempt.attempt_number for attempt in task_attempts]
+            if numbers != list(range(1, len(numbers) + 1)):
+                raise RecoveryStateError(
+                    workflow_run.run_id,
+                    f"attempt numbers for task '{task_id}' are not contiguous.",
+                )
+
+            running_attempts = [
+                attempt for attempt in task_attempts if attempt.status == "RUNNING"
+            ]
+            if len(running_attempts) > 1:
+                raise RecoveryStateError(
+                    workflow_run.run_id,
+                    f"task '{task_id}' has multiple running attempts.",
+                )
+            task_status = workflow_run.get_task_status(task_id)
+            if task_status == TaskStatus.RUNNING and not running_attempts:
+                raise RecoveryStateError(
+                    workflow_run.run_id,
+                    f"task '{task_id}' is RUNNING without a RUNNING attempt.",
+                )
+            if running_attempts and task_status != TaskStatus.RUNNING:
+                raise RecoveryStateError(
+                    workflow_run.run_id,
+                    f"task '{task_id}' has a RUNNING attempt while {task_status}.",
+                )

@@ -5,9 +5,16 @@ from app.engine.exceptions import (
 from app.engine.executor import WorkflowExecutionResult
 from app.engine.registry import TaskCallable, TaskRegistry
 from app.engine.status import TaskStatus
-from app.services.execution import _DurableWorkflowRunner
+from app.services.execution import (
+    _DurableWorkflowRunner,
+    _InMemoryTaskAttemptRepository,
+)
 from app.services.recovery import WorkflowRecoveryService
-from app.services.repositories import WorkflowRepository, WorkflowRunRepository
+from app.services.repositories import (
+    TaskAttemptRepository,
+    WorkflowRepository,
+    WorkflowRunRepository,
+)
 
 
 class WorkflowResumeService:
@@ -15,10 +22,20 @@ class WorkflowResumeService:
         self,
         workflow_repository: WorkflowRepository,
         run_repository: WorkflowRunRepository,
+        attempt_repository: TaskAttemptRepository | None = None,
     ) -> None:
         self._workflow_repository = workflow_repository
         self._run_repository = run_repository
-        self._recovery = WorkflowRecoveryService(workflow_repository, run_repository)
+        self._attempt_repository = attempt_repository or (
+            TaskAttemptRepository(run_repository._session)
+            if hasattr(run_repository, "_session")
+            else _InMemoryTaskAttemptRepository(run_repository)
+        )
+        self._recovery = WorkflowRecoveryService(
+            workflow_repository,
+            run_repository,
+            self._attempt_repository,
+        )
 
     async def resume_run(
         self,
@@ -51,8 +68,10 @@ class WorkflowResumeService:
                 registry.get(task_id)
 
         return await _DurableWorkflowRunner(
+            workflow=workflow,
             workflow_run=workflow_run,
             task_registry=registry,
             run_repository=self._run_repository,
+            attempt_repository=self._attempt_repository,
             max_concurrency=max_concurrency,
         ).run()

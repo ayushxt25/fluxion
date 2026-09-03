@@ -12,7 +12,8 @@ PostgreSQL-backed persistence models, repositories, and Alembic migrations for
 workflow definitions, workflow run state, and durable local execution
 transitions. Fluxion can also recover persisted local crash states by marking
 abandoned `RUNNING` tasks as `INTERRUPTED` and can safely resume unambiguous
-incomplete durable runs.
+incomplete durable runs. Task execution now records explicit attempts with
+configurable retry policy and deterministic exponential backoff.
 
 ## Planned Capabilities
 
@@ -88,15 +89,17 @@ restart and reconcile readiness without executing task callables. Safe resume
 can continue `PENDING` or `RUNNING` durable runs that contain no `RUNNING`,
 `INTERRUPTED`, `FAILED`, or individually `CANCELLED` tasks. Previously
 `SUCCEEDED` tasks are not rerun; execution continues from persisted `READY`
-tasks. Empty workflows are rejected because a workflow with zero executable
-tasks is not meaningful.
+tasks. Ordinary callable failures can be retried according to each task's
+policy, with durable attempt history and `next_retry_at` state so retry timing
+survives process restart. Empty workflows are rejected because a workflow with
+zero executable tasks is not meaningful.
 
-Execution is currently single-process and local. Distributed workers,
-scheduling services, Redis coordination, and retries are not implemented yet.
-Interrupted tasks are not retried automatically, and recovery does not guarantee
-exactly-once effects for external side effects performed before a crash.
-Concurrent multi-process resume is not supported because Fluxion does not yet
-have leases or distributed ownership.
+Execution and retries are currently single-process and local. Distributed
+workers, scheduling services, and Redis coordination are not implemented yet.
+Interrupted tasks are not retried automatically, and recovery does not
+guarantee exactly-once effects for external side effects performed before a
+crash. Concurrent multi-process resume is not supported because Fluxion does not
+yet have leases or distributed ownership.
 
 For Phase 2, a failed task or individually cancelled task marks the workflow run
 as failed because successful completion is no longer possible. Explicit workflow
