@@ -122,3 +122,8 @@ class ExecutionPersistenceError(PersistenceError):
 class RecoveryStateError(Exception):
     def __init__(self, run_id: str, message: str) -> None:
         super().__init__(f"Workflow run '{run_id}' cannot be recovered: {message}")
+
+
+class WorkflowRunNotResumableError(Exception):
+    def __init__(self, run_id: str, reason: str) -> None:
+        super().__init__(f"Workflow run '{run_id}' is not resumable: {reason}")

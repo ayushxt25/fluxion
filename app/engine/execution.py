@@ -190,15 +190,16 @@ class WorkflowRun:
 
     def _validate_recoverable_state(self) -> None:
         if self._status == WorkflowStatus.PENDING:
-            running_tasks = [
+            invalid_tasks = [
                 task_id
                 for task_id, task_run in self._task_runs.items()
-                if task_run.status == TaskStatus.RUNNING
+                if task_run.status not in {TaskStatus.READY, TaskStatus.BLOCKED}
             ]
-            if running_tasks:
+            if invalid_tasks:
                 raise RecoveryStateError(
                     self.run_id,
-                    f"PENDING run has RUNNING tasks: {sorted(running_tasks)}.",
+                    f"PENDING run has tasks that already began: "
+                    f"{sorted(invalid_tasks)}.",
                 )
 
         if self._status == WorkflowStatus.SUCCEEDED and any(
@@ -208,6 +209,18 @@ class WorkflowRun:
             raise RecoveryStateError(
                 self.run_id,
                 "SUCCEEDED run contains non-SUCCEEDED tasks.",
+            )
+
+        if (
+            self._status in {WorkflowStatus.PENDING, WorkflowStatus.RUNNING}
+            and all(
+                task_run.status == TaskStatus.SUCCEEDED
+                for task_run in self._task_runs.values()
+            )
+        ):
+            raise RecoveryStateError(
+                self.run_id,
+                f"{self._status} run contains only SUCCEEDED tasks.",
             )
 
         for task_id in self._dag.topological_order():

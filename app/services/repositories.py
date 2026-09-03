@@ -207,6 +207,18 @@ class WorkflowRunRepository:
                 for record in result.scalars()
             )
 
+    async def get_workflow_id(self, run_id: str) -> str:
+        async with self._session.begin():
+            result = await self._session.execute(
+                select(WorkflowRunRecord.workflow_id).where(
+                    WorkflowRunRecord.run_id == run_id
+                )
+            )
+            workflow_id = result.scalar_one_or_none()
+            if workflow_id is None:
+                raise WorkflowRunNotFoundError(run_id)
+            return workflow_id
+
     async def save_state(self, workflow_run: WorkflowRun) -> None:
         async with self._session.begin():
             result = await self._session.execute(

@@ -229,6 +229,23 @@ def test_pending_run_with_running_task_is_rejected() -> None:
         asyncio.run(scenario())
 
 
+def test_pending_run_with_succeeded_task_is_rejected() -> None:
+    async def scenario():
+        definition = workflow(task("a"))
+        run = restored_run(
+            definition,
+            WorkflowStatus.PENDING,
+            {"a": TaskStatus.SUCCEEDED},
+        )
+        await WorkflowRecoveryService(
+            FakeWorkflowRepository(definition),
+            FakeRunRepository(run),
+        ).recover_run("run-1", "workflow")
+
+    with pytest.raises(RecoveryStateError):
+        asyncio.run(scenario())
+
+
 def test_succeeded_task_with_failed_dependency_is_rejected() -> None:
     async def scenario():
         definition = workflow(task("a"), task("b", ("a",)))

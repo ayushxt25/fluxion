@@ -43,13 +43,44 @@ class PersistentWorkflowExecutor:
         self._run_repository = run_repository
         self._run = WorkflowRun.create(run_id or str(uuid4()), workflow, self._dag)
         self._max_concurrency = max_concurrency
-        self._errors: dict[str, str] = {}
 
     async def run(self) -> WorkflowExecutionResult:
         self._registry.validate_workflow(self._workflow)
         if not await self._workflow_repository.exists(self._workflow.id):
             raise WorkflowNotFoundError(self._workflow.id)
         await self._persist_initial_run()
+
+        return await _DurableWorkflowRunner(
+            workflow_run=self._run,
+            task_registry=self._registry,
+            run_repository=self._run_repository,
+            max_concurrency=self._max_concurrency,
+        ).run()
+
+    async def _persist_initial_run(self) -> None:
+        try:
+            await self._run_repository.create(self._run)
+        except WorkflowRunAlreadyExistsError:
+            raise
+        except Exception as exc:
+            raise ExecutionPersistenceError(self._run.run_id, "run creation") from exc
+
+
+class _DurableWorkflowRunner:
+    def __init__(
+        self,
+        workflow_run: WorkflowRun,
+        task_registry: TaskRegistry,
+        run_repository: WorkflowRunRepository,
+        max_concurrency: int | None,
+    ) -> None:
+        self._run = workflow_run
+        self._registry = task_registry
+        self._run_repository = run_repository
+        self._max_concurrency = max_concurrency
+        self._errors: dict[str, str] = {}
+
+    async def run(self) -> WorkflowExecutionResult:
         running: dict[asyncio.Task[str | None], str] = {}
 
         while True:
@@ -66,14 +97,6 @@ class PersistentWorkflowExecutor:
             await self._process_completed_tasks(done, running)
 
         return self._snapshot()
-
-    async def _persist_initial_run(self) -> None:
-        try:
-            await self._run_repository.create(self._run)
-        except WorkflowRunAlreadyExistsError:
-            raise
-        except Exception as exc:
-            raise ExecutionPersistenceError(self._run.run_id, "run creation") from exc
 
     async def _persist_state(self, operation: str) -> None:
         try:

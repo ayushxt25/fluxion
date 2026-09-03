@@ -5,6 +5,13 @@ from types import MappingProxyType
 from app.engine.status import TaskStatus, WorkflowStatus
 from app.services.repositories import WorkflowRepository, WorkflowRunRepository
 
+_NON_RESUMABLE_TASK_STATUSES = {
+    TaskStatus.RUNNING,
+    TaskStatus.INTERRUPTED,
+    TaskStatus.FAILED,
+    TaskStatus.CANCELLED,
+}
+
 
 @dataclass(frozen=True)
 class WorkflowRecoveryResult:
@@ -65,19 +72,23 @@ class WorkflowRecoveryService:
 
         await self._run_repository.save_state(workflow_run)
 
+        task_statuses = {
+            task_id: task_run.status
+            for task_id, task_run in workflow_run.task_runs.items()
+        }
+
         return WorkflowRecoveryResult(
             run_id=workflow_run.run_id,
             workflow_id=workflow_run.workflow_id,
             previous_status=previous_status,
             recovered_status=workflow_run.status,
             interrupted_task_ids=interrupted_task_ids,
-            task_statuses={
-                task_id: task_run.status
-                for task_id, task_run in workflow_run.task_runs.items()
-            },
+            task_statuses=task_statuses,
             resumable=(
-                not interrupted_task_ids
-                and workflow_run.status
-                in {WorkflowStatus.PENDING, WorkflowStatus.RUNNING}
+                workflow_run.status in {WorkflowStatus.PENDING, WorkflowStatus.RUNNING}
+                and not any(
+                    status in _NON_RESUMABLE_TASK_STATUSES
+                    for status in task_statuses.values()
+                )
             ),
         )
