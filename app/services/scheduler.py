@@ -3,10 +3,11 @@ from datetime import UTC, datetime
 
 from app.dispatch.messages import TaskDispatchMessage
 from app.dispatch.transport import TaskDispatcher
-from app.engine.exceptions import DispatchError, InvalidConcurrencyLimitError
+from app.engine.exceptions import InvalidConcurrencyLimitError
 from app.engine.execution import WorkflowRun
 from app.engine.status import TaskStatus
 from app.services.repositories import (
+    DispatchOutboxRepository,
     TaskAttemptRepository,
     WorkflowRepository,
     WorkflowRunRepository,
@@ -19,6 +20,7 @@ class DispatchSummary:
     workflow_id: str
     dispatched_task_ids: tuple[str, ...]
     messages: tuple[TaskDispatchMessage, ...]
+    outbox_event_ids: tuple[str, ...]
 
 
 class WorkflowScheduler:
@@ -27,12 +29,18 @@ class WorkflowScheduler:
         workflow_repository: WorkflowRepository,
         run_repository: WorkflowRunRepository,
         attempt_repository: TaskAttemptRepository,
-        dispatcher: TaskDispatcher,
+        dispatcher: TaskDispatcher | None = None,
+        outbox_repository: DispatchOutboxRepository | None = None,
     ) -> None:
         self._workflow_repository = workflow_repository
         self._run_repository = run_repository
         self._attempt_repository = attempt_repository
         self._dispatcher = dispatcher
+        self._outbox_repository = outbox_repository or (
+            DispatchOutboxRepository(run_repository._session)
+            if hasattr(run_repository, "_session")
+            else None
+        )
 
     async def dispatch_ready(
         self,
@@ -50,37 +58,39 @@ class WorkflowScheduler:
 
         open_slots = self._open_slots(workflow_run, max_concurrency)
         messages = []
+        outbox_event_ids = []
         for task_id in workflow_run.ready_tasks()[:open_slots]:
             workflow_run.dispatch_task(task_id)
             attempt_number = await self._attempt_repository.next_attempt_number(
                 run_id,
                 task_id,
             )
-            attempt = await self._attempt_repository.create_dispatched_attempt(
-                workflow_run,
-                task_id,
-                attempt_number,
-            )
             message = TaskDispatchMessage(
                 workflow_id=workflow_id,
                 run_id=run_id,
                 task_id=task_id,
-                attempt_number=attempt.attempt_number,
-                attempt_key=attempt.attempt_key,
+                attempt_number=attempt_number,
+                attempt_key=f"{run_id}:{task_id}:{attempt_number}",
                 idempotency_key=workflow_run.task_runs[task_id].idempotency_key
                 or f"{run_id}:{task_id}",
             )
-            try:
-                await self._dispatcher.dispatch(message)
-            except Exception as exc:
-                raise DispatchError("Failed to publish dispatch message.") from exc
+            if self._outbox_repository is None:
+                raise RuntimeError("WorkflowScheduler requires an outbox repository.")
+            _, event = await self._outbox_repository.create_dispatch_intent(
+                workflow_run,
+                task_id,
+                attempt_number,
+                message,
+            )
             messages.append(message)
+            outbox_event_ids.append(event.id)
 
         return DispatchSummary(
             run_id=run_id,
             workflow_id=workflow_id,
             dispatched_task_ids=tuple(message.task_id for message in messages),
             messages=tuple(messages),
+            outbox_event_ids=tuple(outbox_event_ids),
         )
 
     async def _promote_due_retries(self, workflow_run: WorkflowRun) -> None:

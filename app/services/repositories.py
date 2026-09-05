@@ -1,19 +1,27 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.db.models.execution import TaskAttemptRecord, TaskRunRecord, WorkflowRunRecord
+from app.db.models.execution import (
+    DispatchOutboxRecord,
+    TaskAttemptRecord,
+    TaskRunRecord,
+    WorkflowRunRecord,
+)
 from app.db.models.workflow import (
     TaskDefinitionRecord,
     TaskDependencyRecord,
     WorkflowDefinitionRecord,
 )
+from app.dispatch.messages import TaskDispatchMessage
 from app.engine.dag import WorkflowDAG
 from app.engine.exceptions import (
+    InvalidOutboxPayloadError,
     LeaseClaimError,
     LeaseLostError,
     PersistenceError,
@@ -43,6 +51,21 @@ class ExpiredTaskAttemptRef:
     attempt_number: int
     worker_id: str | None
     lease_token: str | None
+
+
+@dataclass(frozen=True)
+class DispatchOutboxEvent:
+    id: str
+    event_type: str
+    message: TaskDispatchMessage
+    run_id: str
+    workflow_id: str
+    task_id: str
+    attempt_number: int
+    created_at: datetime
+    published_at: datetime | None
+    publish_attempts: int
+    last_error: str | None
 
 
 class WorkflowRepository:
@@ -289,6 +312,177 @@ class WorkflowRunRepository:
                 task_records[task_id].idempotency_key = (
                     task_run.idempotency_key or f"{workflow_run.run_id}:{task_id}"
                 )
+
+
+class DispatchOutboxRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def create_dispatch_intent(
+        self,
+        workflow_run: WorkflowRun,
+        task_id: str,
+        attempt_number: int,
+        message: TaskDispatchMessage,
+    ) -> tuple[TaskAttempt, DispatchOutboxEvent]:
+        attempt = TaskAttempt(
+            run_id=workflow_run.run_id,
+            workflow_id=workflow_run.workflow_id,
+            task_id=task_id,
+            attempt_number=attempt_number,
+            status=AttemptStatus.DISPATCHED,
+        )
+        event_id = str(uuid4())
+        try:
+            async with self._session.begin():
+                await self._save_workflow_state(workflow_run)
+                self._session.add(
+                    TaskAttemptRecord(
+                        run_id=attempt.run_id,
+                        workflow_id=attempt.workflow_id,
+                        task_id=attempt.task_id,
+                        attempt_number=attempt.attempt_number,
+                        status=attempt.status.value,
+                    )
+                )
+                record = DispatchOutboxRecord(
+                    id=event_id,
+                    event_type="TASK_DISPATCH",
+                    payload=message.model_dump(mode="json"),
+                    run_id=message.run_id,
+                    workflow_id=message.workflow_id,
+                    task_id=message.task_id,
+                    attempt_number=message.attempt_number,
+                )
+                self._session.add(record)
+                await self._session.flush()
+                created_at = record.created_at
+        except IntegrityError as exc:
+            raise PersistenceError(
+                f"Failed to create dispatch intent for '{message.attempt_key}'."
+            ) from exc
+
+        return attempt, DispatchOutboxEvent(
+            id=event_id,
+            event_type="TASK_DISPATCH",
+            message=message,
+            run_id=message.run_id,
+            workflow_id=message.workflow_id,
+            task_id=message.task_id,
+            attempt_number=message.attempt_number,
+            created_at=created_at,
+            published_at=None,
+            publish_attempts=0,
+            last_error=None,
+        )
+
+    async def list_unpublished(
+        self,
+        limit: int = 100,
+    ) -> tuple[DispatchOutboxEvent, ...]:
+        async with self._session.begin():
+            result = await self._session.execute(
+                select(DispatchOutboxRecord)
+                .where(DispatchOutboxRecord.published_at.is_(None))
+                .order_by(DispatchOutboxRecord.created_at, DispatchOutboxRecord.id)
+                .limit(limit)
+            )
+            return tuple(self._event_from_record(record) for record in result.scalars())
+
+    async def mark_published(self, event_id: str, published_at: datetime) -> None:
+        async with self._session.begin():
+            record = await self._session.get(DispatchOutboxRecord, event_id)
+            if record is None:
+                raise PersistenceError(f"Dispatch outbox event '{event_id}' not found.")
+            record.published_at = published_at
+            record.publish_attempts += 1
+            record.last_error = None
+
+    async def record_publish_failure(self, event_id: str, error: str) -> None:
+        async with self._session.begin():
+            record = await self._session.get(DispatchOutboxRecord, event_id)
+            if record is None:
+                raise PersistenceError(f"Dispatch outbox event '{event_id}' not found.")
+            record.publish_attempts += 1
+            record.last_error = error
+
+    async def find_dispatched_attempts_missing_outbox(
+        self,
+    ) -> tuple[tuple[str, str, int], ...]:
+        async with self._session.begin():
+            result = await self._session.execute(
+                select(
+                    TaskAttemptRecord.run_id,
+                    TaskAttemptRecord.task_id,
+                    TaskAttemptRecord.attempt_number,
+                )
+                .outerjoin(
+                    DispatchOutboxRecord,
+                    (DispatchOutboxRecord.run_id == TaskAttemptRecord.run_id)
+                    & (DispatchOutboxRecord.task_id == TaskAttemptRecord.task_id)
+                    & (
+                        DispatchOutboxRecord.attempt_number
+                        == TaskAttemptRecord.attempt_number
+                    ),
+                )
+                .where(TaskAttemptRecord.status == AttemptStatus.DISPATCHED.value)
+                .where(DispatchOutboxRecord.id.is_(None))
+                .order_by(
+                    TaskAttemptRecord.run_id,
+                    TaskAttemptRecord.task_id,
+                    TaskAttemptRecord.attempt_number,
+                )
+            )
+            return tuple(result.all())
+
+    def _event_from_record(
+        self,
+        record: DispatchOutboxRecord,
+    ) -> DispatchOutboxEvent:
+        try:
+            message = TaskDispatchMessage.model_validate(record.payload)
+            TaskDispatchMessage.from_json(message.to_json())
+        except Exception as exc:
+            raise InvalidOutboxPayloadError(record.id, "payload is invalid.") from exc
+        return DispatchOutboxEvent(
+            id=record.id,
+            event_type=record.event_type,
+            message=message,
+            run_id=record.run_id,
+            workflow_id=record.workflow_id,
+            task_id=record.task_id,
+            attempt_number=record.attempt_number,
+            created_at=record.created_at,
+            published_at=record.published_at,
+            publish_attempts=record.publish_attempts,
+            last_error=record.last_error,
+        )
+
+    async def _save_workflow_state(self, workflow_run: WorkflowRun) -> None:
+        result = await self._session.execute(
+            select(WorkflowRunRecord)
+            .where(WorkflowRunRecord.run_id == workflow_run.run_id)
+            .where(WorkflowRunRecord.workflow_id == workflow_run.workflow_id)
+            .options(selectinload(WorkflowRunRecord.task_runs))
+        )
+        record = result.scalar_one_or_none()
+        if record is None:
+            raise WorkflowRunNotFoundError(workflow_run.run_id)
+
+        record.status = workflow_run.status.value
+        task_records = {task.task_id: task for task in record.task_runs}
+        if set(task_records) != set(workflow_run.task_runs):
+            raise PersistenceError(
+                f"Persisted task runs for '{workflow_run.run_id}' do not match "
+                "the domain workflow run."
+            )
+
+        for task_id, task_run in workflow_run.task_runs.items():
+            task_records[task_id].status = task_run.status.value
+            task_records[task_id].next_retry_at = task_run.next_retry_at
+            task_records[task_id].idempotency_key = (
+                task_run.idempotency_key or f"{workflow_run.run_id}:{task_id}"
+            )
 
 
 class TaskAttemptRepository:

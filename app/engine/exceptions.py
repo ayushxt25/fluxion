@@ -151,6 +151,20 @@ class DispatchStateError(DispatchError):
         )
 
 
+class DispatchOutboxError(DispatchError):
+    """Base exception for durable dispatch outbox failures."""
+
+
+class OutboxPublishError(DispatchOutboxError):
+    def __init__(self, event_id: str, reason: str) -> None:
+        super().__init__(f"Outbox event '{event_id}' could not be published: {reason}")
+
+
+class InvalidOutboxPayloadError(DispatchOutboxError):
+    def __init__(self, event_id: str, reason: str) -> None:
+        super().__init__(f"Outbox event '{event_id}' has invalid payload: {reason}")
+
+
 class WorkerLeaseError(Exception):
     """Base exception for worker lease ownership failures."""
 

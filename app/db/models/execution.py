@@ -5,10 +5,13 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    Integer,
     String,
+    Text,
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -116,6 +119,44 @@ class TaskAttemptRecord(Base):
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class DispatchOutboxRecord(Base):
+    __tablename__ = "dispatch_outbox"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["run_id", "workflow_id", "task_id"],
+            ["task_runs.run_id", "task_runs.workflow_id", "task_runs.task_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "run_id",
+            "task_id",
+            "attempt_number",
+            name="uq_dispatch_outbox_run_task_attempt",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    run_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    task_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    attempt_number: Mapped[int] = mapped_column(nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    publish_attempts: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+
 Index(
     "ix_task_runs_status_next_retry_at",
     TaskRunRecord.status,
@@ -126,4 +167,11 @@ Index(
     "ix_task_attempts_status_lease_expires_at",
     TaskAttemptRecord.status,
     TaskAttemptRecord.lease_expires_at,
+)
+
+Index(
+    "ix_dispatch_outbox_unpublished_created",
+    DispatchOutboxRecord.created_at,
+    DispatchOutboxRecord.id,
+    postgresql_where=DispatchOutboxRecord.published_at.is_(None),
 )

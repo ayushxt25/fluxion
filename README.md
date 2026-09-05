@@ -15,7 +15,8 @@ abandoned `RUNNING` tasks as `INTERRUPTED` and can safely resume unambiguous
 incomplete durable runs. Task execution now records explicit attempts with
 configurable retry policy and deterministic exponential backoff. Task callables
 can also receive an immutable execution context containing stable attempt and
-task idempotency identities.
+task idempotency identities. Redis dispatch now uses a PostgreSQL transactional
+outbox so dispatch intent is durable before transport publication.
 
 ## Planned Capabilities
 
@@ -95,13 +96,14 @@ tasks. Ordinary callable failures can be retried according to each task's
 policy, with durable attempt history and `next_retry_at` state so retry timing
 survives process restart. Each task run has a durable deterministic
 `idempotency_key`, and each attempt exposes a deterministic `attempt_key` to
-context-aware task callables. Phase 10 adds a Redis-backed dispatch boundary:
-a scheduler can persist `DISPATCHED` task attempts and publish versioned JSON
-dispatch messages, while workers consume messages and resolve task
-implementations locally. Phase 11 adds worker lease ownership, heartbeat
-renewal, lease-token fencing, and explicit expired-lease reclaim. PostgreSQL
-remains the source of truth; Redis is only transport. Empty workflows are
-rejected because a workflow with zero executable tasks is not meaningful.
+context-aware task callables. Redis-backed dispatch is split across a scheduler,
+transactional dispatch outbox, explicit publisher, and worker. The scheduler
+persists `DISPATCHED` task attempts and matching outbox rows atomically; the
+publisher later sends versioned JSON messages to Redis. Phase 11 adds worker
+lease ownership, heartbeat renewal, lease-token fencing, and explicit
+expired-lease reclaim. PostgreSQL remains the source of truth; Redis is only
+transport. Empty workflows are rejected because a workflow with zero executable
+tasks is not meaningful.
 
 The original direct executor remains single-process and local. Redis dispatch
 and worker services are currently a foundation, not a full distributed runtime.
@@ -110,16 +112,16 @@ guarantee exactly-once effects for external side effects performed before a
 crash. The idempotency key is an identity primitive only; tasks are responsible
 for using it with external systems. Concurrent multi-process resume is not
 supported; Fluxion does not yet provide distributed run ownership or resume
-coordination.
-Fluxion still does not provide a transactional outbox or exactly-once execution.
-Database and Redis publishing are not atomic; a failed publish may leave a
-stranded `DISPATCHED` task for a future reconciliation phase. Duplicate Redis
-delivery may occur, and workers reject messages that do not match durable
-PostgreSQL state. Expired leases are treated conservatively: the attempt and
-task become `INTERRUPTED` and the workflow becomes `FAILED`; Fluxion does not
-automatically retry ambiguous work. Stale workers cannot commit after lease loss
-because terminal attempt updates require the current lease token. There is no
-automatic scheduler or lease-reaper daemon yet.
+coordination. The outbox provides at-least-once publication intent, not
+exactly-once delivery or exactly-once execution. Redis message loss after an
+outbox row is marked published is not automatically detected, and concurrent
+outbox publishers are not coordinated yet. Duplicate Redis delivery may occur,
+and workers reject messages that do not match durable PostgreSQL state. Expired
+leases are treated conservatively: the attempt and task become `INTERRUPTED`
+and the workflow becomes `FAILED`; Fluxion does not automatically retry
+ambiguous work. Stale workers cannot commit after lease loss because terminal
+attempt updates require the current lease token. There is no automatic
+scheduler, publisher, or lease-reaper daemon yet.
 
 For Phase 2, a failed task or individually cancelled task marks the workflow run
 as failed because successful completion is no longer possible. Explicit workflow

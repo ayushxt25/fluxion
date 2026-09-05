@@ -30,8 +30,10 @@ from app.engine.execution import WorkflowRun
 from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
 from app.schemas.workflow import RetryPolicy, TaskDefinition, WorkflowDefinition
 from app.services.leases import LeaseReaper
+from app.services.outbox import DispatchOutboxPublisher, DispatchReconciliationService
 from app.services.recovery import WorkflowRecoveryService
 from app.services.repositories import (
+    DispatchOutboxRepository,
     TaskAttemptRepository,
     WorkflowRepository,
     WorkflowRunRepository,
@@ -91,6 +93,20 @@ async def persist_run(session, definition, run_id="run-1"):
     return run
 
 
+async def schedule_and_publish(session, dispatcher, run_id="run-1"):
+    summary = await WorkflowScheduler(
+        WorkflowRepository(session),
+        WorkflowRunRepository(session),
+        TaskAttemptRepository(session),
+        dispatcher,
+    ).dispatch_ready(run_id)
+    await DispatchOutboxPublisher(
+        DispatchOutboxRepository(session),
+        dispatcher,
+    ).publish_pending()
+    return summary
+
+
 def test_scheduler_dispatches_ready_task_and_persists_identity() -> None:
     async def body(session):
         definition = workflow("wf-dispatch", task("a"), task("b", ("a",)))
@@ -105,14 +121,44 @@ def test_scheduler_dispatches_ready_task_and_persists_identity() -> None:
         ).dispatch_ready("run-1")
         loaded = await WorkflowRunRepository(session).get("run-1", definition)
         attempts = await TaskAttemptRepository(session).list_attempts("run-1", "a")
-        message = await dispatcher.receive(timeout=0.1)
+        events = await DispatchOutboxRepository(session).list_unpublished()
 
         assert summary.dispatched_task_ids == ("a",)
+        assert summary.outbox_event_ids == (events[0].id,)
         assert loaded.get_task_status("a") == TaskStatus.DISPATCHED
         assert loaded.get_task_status("b") == TaskStatus.BLOCKED
         assert attempts[0].status == AttemptStatus.DISPATCHED
-        assert message.attempt_key == attempts[0].attempt_key
-        assert message.idempotency_key == "run-1:a"
+        assert events[0].message.attempt_key == attempts[0].attempt_key
+        assert events[0].message.idempotency_key == "run-1:a"
+        assert await dispatcher.receive(timeout=0.01) is None
+
+    run_in_db(body)
+
+
+def test_outbox_publisher_publishes_and_marks_event() -> None:
+    async def body(session):
+        definition = workflow("wf-outbox-publish", task("a"))
+        await persist_run(session, definition)
+        dispatcher = InMemoryTaskDispatcher()
+        summary = await WorkflowScheduler(
+            WorkflowRepository(session),
+            WorkflowRunRepository(session),
+            TaskAttemptRepository(session),
+            dispatcher,
+        ).dispatch_ready("run-1")
+
+        result = await DispatchOutboxPublisher(
+            DispatchOutboxRepository(session),
+            dispatcher,
+        ).publish_pending()
+        message = await dispatcher.receive(timeout=0.1)
+        unpublished = await DispatchOutboxRepository(session).list_unpublished()
+
+        assert result.attempted == 1
+        assert result.published == 1
+        assert result.published_event_ids == summary.outbox_event_ids
+        assert message == summary.messages[0]
+        assert unpublished == ()
 
     run_in_db(body)
 
@@ -122,13 +168,7 @@ def test_worker_success_persists_and_unlocks_dependent_without_dispatching_it() 
         definition = workflow("wf-worker", task("a"), task("b", ("a",)))
         await persist_run(session, definition)
         dispatcher = InMemoryTaskDispatcher()
-        scheduler = WorkflowScheduler(
-            WorkflowRepository(session),
-            WorkflowRunRepository(session),
-            TaskAttemptRepository(session),
-            dispatcher,
-        )
-        await scheduler.dispatch_ready("run-1")
+        await schedule_and_publish(session, dispatcher)
         observed = []
 
         def task_a(context: TaskExecutionContext) -> None:
@@ -157,12 +197,7 @@ def test_worker_claim_persists_lease_before_callable_starts() -> None:
         definition = workflow("wf-lease-claim", task("a"))
         await persist_run(session, definition)
         dispatcher = InMemoryTaskDispatcher()
-        await WorkflowScheduler(
-            WorkflowRepository(session),
-            WorkflowRunRepository(session),
-            TaskAttemptRepository(session),
-            dispatcher,
-        ).dispatch_ready("run-1")
+        await schedule_and_publish(session, dispatcher)
         observed = []
 
         async def task_a() -> None:
@@ -203,12 +238,7 @@ def test_worker_failure_with_retry_persists_retry_waiting_without_sleeping() -> 
         )
         await persist_run(session, definition)
         dispatcher = InMemoryTaskDispatcher()
-        await WorkflowScheduler(
-            WorkflowRepository(session),
-            WorkflowRunRepository(session),
-            TaskAttemptRepository(session),
-            dispatcher,
-        ).dispatch_ready("run-1")
+        await schedule_and_publish(session, dispatcher)
 
         def fail() -> None:
             raise RuntimeError("boom")
@@ -234,12 +264,7 @@ def test_heartbeat_extends_lease_and_wrong_token_is_rejected() -> None:
         definition = workflow("wf-heartbeat", task("a"))
         await persist_run(session, definition)
         dispatcher = InMemoryTaskDispatcher()
-        summary = await WorkflowScheduler(
-            WorkflowRepository(session),
-            WorkflowRunRepository(session),
-            TaskAttemptRepository(session),
-            dispatcher,
-        ).dispatch_ready("run-1")
+        summary = await schedule_and_publish(session, dispatcher)
         attempt_repo = TaskAttemptRepository(session)
         run = await WorkflowRunRepository(session).get("run-1", definition)
         attempt = (await attempt_repo.list_attempts("run-1", "a"))[0]
@@ -288,12 +313,7 @@ def test_duplicate_message_does_not_rerun_successful_attempt() -> None:
         definition = workflow("wf-duplicate-message", task("a"))
         await persist_run(session, definition)
         dispatcher = InMemoryTaskDispatcher()
-        await WorkflowScheduler(
-            WorkflowRepository(session),
-            WorkflowRunRepository(session),
-            TaskAttemptRepository(session),
-            dispatcher,
-        ).dispatch_ready("run-1")
+        await schedule_and_publish(session, dispatcher)
         message = await dispatcher.receive(timeout=0.1)
         calls = []
         worker = TaskWorker(
@@ -318,12 +338,7 @@ def test_expired_lease_reclaim_interrupts_and_fences_stale_worker() -> None:
         definition = workflow("wf-reclaim", task("a"))
         await persist_run(session, definition)
         dispatcher = InMemoryTaskDispatcher()
-        await WorkflowScheduler(
-            WorkflowRepository(session),
-            WorkflowRunRepository(session),
-            TaskAttemptRepository(session),
-            dispatcher,
-        ).dispatch_ready("run-1")
+        await schedule_and_publish(session, dispatcher)
         attempt_repo = TaskAttemptRepository(session)
         run_repo = WorkflowRunRepository(session)
         run = await run_repo.get("run-1", definition)
@@ -374,12 +389,7 @@ def test_active_lease_is_not_reclaimed() -> None:
         definition = workflow("wf-active-lease", task("a"))
         await persist_run(session, definition)
         dispatcher = InMemoryTaskDispatcher()
-        await WorkflowScheduler(
-            WorkflowRepository(session),
-            WorkflowRunRepository(session),
-            TaskAttemptRepository(session),
-            dispatcher,
-        ).dispatch_ready("run-1")
+        await schedule_and_publish(session, dispatcher)
         attempt_repo = TaskAttemptRepository(session)
         run = await WorkflowRunRepository(session).get("run-1", definition)
         attempt = (await attempt_repo.list_attempts("run-1", "a"))[0]
@@ -409,16 +419,25 @@ def test_publish_failure_leaves_durable_dispatched_state() -> None:
         definition = workflow("wf-publish-failure", task("a"))
         await persist_run(session, definition)
 
-        with pytest.raises(DispatchError):
-            await WorkflowScheduler(
-                WorkflowRepository(session),
-                WorkflowRunRepository(session),
-                TaskAttemptRepository(session),
-                FailingTaskDispatcher(),
-            ).dispatch_ready("run-1")
+        summary = await WorkflowScheduler(
+            WorkflowRepository(session),
+            WorkflowRunRepository(session),
+            TaskAttemptRepository(session),
+            FailingTaskDispatcher(),
+        ).dispatch_ready("run-1")
+        result = await DispatchOutboxPublisher(
+            DispatchOutboxRepository(session),
+            FailingTaskDispatcher(),
+        ).publish_pending()
         loaded = await WorkflowRunRepository(session).get("run-1", definition)
+        events = await DispatchOutboxRepository(session).list_unpublished()
 
+        assert summary.dispatched_task_ids == ("a",)
+        assert result.failed == 1
         assert loaded.get_task_status("a") == TaskStatus.DISPATCHED
+        assert events[0].published_at is None
+        assert events[0].publish_attempts == 1
+        assert events[0].last_error is not None
 
     run_in_db(body)
 
@@ -442,5 +461,66 @@ def test_recovery_keeps_dispatched_state_not_resumable() -> None:
 
         assert result.task_statuses["a"] == TaskStatus.DISPATCHED
         assert result.resumable is False
+
+    run_in_db(body)
+
+
+def test_retry_scheduling_creates_new_outbox_intent() -> None:
+    async def body(session):
+        definition = workflow(
+            "wf-retry-outbox",
+            task(
+                "a",
+                retry_policy=RetryPolicy(
+                    max_attempts=2,
+                    initial_backoff_seconds=0,
+                ),
+            ),
+        )
+        await persist_run(session, definition)
+        dispatcher = InMemoryTaskDispatcher()
+        await schedule_and_publish(session, dispatcher)
+
+        def fail_once() -> None:
+            raise RuntimeError("try again")
+
+        await TaskWorker(
+            WorkflowRepository(session),
+            WorkflowRunRepository(session),
+            TaskAttemptRepository(session),
+            dispatcher,
+            {"a": fail_once},
+        ).run_once(timeout=0.1)
+
+        summary = await WorkflowScheduler(
+            WorkflowRepository(session),
+            WorkflowRunRepository(session),
+            TaskAttemptRepository(session),
+            dispatcher,
+        ).dispatch_ready("run-1")
+        attempts = await TaskAttemptRepository(session).list_attempts("run-1", "a")
+        events = await DispatchOutboxRepository(session).list_unpublished()
+
+        assert summary.dispatched_task_ids == ("a",)
+        assert attempts[-1].attempt_number == 2
+        assert attempts[-1].status == AttemptStatus.DISPATCHED
+        assert events[0].message.attempt_key == "run-1:a:2"
+
+    run_in_db(body)
+
+
+def test_reconciliation_detects_legacy_dispatched_without_outbox() -> None:
+    async def body(session):
+        definition = workflow("wf-legacy-dispatch", task("a"))
+        await persist_run(session, definition)
+        run = await WorkflowRunRepository(session).get("run-1", definition)
+        run.dispatch_task("a")
+        await TaskAttemptRepository(session).create_dispatched_attempt(run, "a", 1)
+
+        result = await DispatchReconciliationService(
+            DispatchOutboxRepository(session)
+        ).inspect()
+
+        assert result.dispatched_attempts_missing_outbox == (("run-1", "a", 1),)
 
     run_in_db(body)
