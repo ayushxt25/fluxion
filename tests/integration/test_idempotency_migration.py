@@ -58,8 +58,8 @@ async def insert_phase8_run(engine) -> None:
                     retry_max_backoff_seconds
                 )
                 VALUES
-                    ('wf-migrated', 'a', NULL, 1, 0, 2, NULL),
-                    ('wf-migrated', 'b', NULL, 1, 0, 2, NULL)
+                    ('wf-migrated', 'charge', NULL, 1, 0, 2, NULL),
+                    ('wf-migrated', 'email', NULL, 1, 0, 2, NULL)
                 """
             )
         )
@@ -67,7 +67,9 @@ async def insert_phase8_run(engine) -> None:
             text(
                 """
                 INSERT INTO workflow_runs (run_id, workflow_id, status)
-                VALUES ('run-migrated', 'wf-migrated', 'PENDING')
+                VALUES
+                    ('run-123', 'wf-migrated', 'PENDING'),
+                    ('run-456', 'wf-migrated', 'PENDING')
                 """
             )
         )
@@ -82,64 +84,97 @@ async def insert_phase8_run(engine) -> None:
                     next_retry_at
                 )
                 VALUES
-                    ('run-migrated', 'wf-migrated', 'a', 'READY', NULL),
-                    ('run-migrated', 'wf-migrated', 'b', 'READY', NULL)
+                    ('run-123', 'wf-migrated', 'charge', 'READY', NULL),
+                    ('run-123', 'wf-migrated', 'email', 'READY', NULL),
+                    ('run-456', 'wf-migrated', 'charge', 'READY', NULL)
                 """
             )
         )
 
 
+async def reset_alembic_schema() -> None:
+    engine = create_async_engine(TEST_DATABASE_URL)
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
+            await connection.execute(text("CREATE SCHEMA public"))
+            await connection.execute(text("GRANT ALL ON SCHEMA public TO public"))
+    finally:
+        await engine.dispose()
+
+
 def test_phase9_migration_backfills_task_run_idempotency_keys() -> None:
     config = alembic_config()
-    command.downgrade(config, "base")
-    command.upgrade(config, "20260903_0002")
+    asyncio.run(reset_alembic_schema())
+    try:
+        command.upgrade(config, "20260903_0002")
 
-    async def scenario() -> None:
-        engine = create_async_engine(TEST_DATABASE_URL)
-        try:
-            await insert_phase8_run(engine)
-        finally:
-            await engine.dispose()
+        async def scenario() -> None:
+            engine = create_async_engine(TEST_DATABASE_URL)
+            try:
+                await insert_phase8_run(engine)
+            finally:
+                await engine.dispose()
 
-    asyncio.run(scenario())
-    command.upgrade(config, "head")
+        asyncio.run(scenario())
+        command.upgrade(config, "head")
 
-    async def verify() -> None:
-        engine = create_async_engine(TEST_DATABASE_URL)
-        session_factory = async_sessionmaker(engine, expire_on_commit=False)
-        try:
-            async with session_factory() as session:
-                result = await session.execute(
-                    select(TaskRunRecord.task_id, TaskRunRecord.idempotency_key)
-                    .where(TaskRunRecord.run_id == "run-migrated")
-                    .order_by(TaskRunRecord.task_id)
-                )
-                assert tuple(result.all()) == (
-                    ("a", "run-migrated:a"),
-                    ("b", "run-migrated:b"),
-                )
+        async def verify() -> None:
+            engine = create_async_engine(TEST_DATABASE_URL)
+            session_factory = async_sessionmaker(engine, expire_on_commit=False)
+            try:
+                async with session_factory() as session:
+                    result = await session.execute(
+                        select(TaskRunRecord.task_id, TaskRunRecord.idempotency_key)
+                        .where(TaskRunRecord.run_id == "run-123")
+                        .order_by(TaskRunRecord.task_id)
+                    )
+                    assert tuple(result.all()) == (
+                        ("charge", "run-123:charge"),
+                        ("email", "run-123:email"),
+                    )
 
-            async with session_factory() as session:
-                workflow = WorkflowDefinition(
-                    id="wf-migrated",
-                    name="Migrated",
-                    tasks=(TaskDefinition(id="a"), TaskDefinition(id="b")),
-                )
-                loaded = await WorkflowRunRepository(session).get(
-                    "run-migrated",
-                    workflow,
-                )
-                assert loaded.task_runs["a"].idempotency_key == "run-migrated:a"
-
-            async with session_factory() as session:
-                with pytest.raises(IntegrityError):
-                    async with session.begin():
-                        record = await session.get(
-                            TaskRunRecord,
-                            ("run-migrated", "b"),
+                    key_result = await session.execute(
+                        select(TaskRunRecord.idempotency_key).order_by(
+                            TaskRunRecord.run_id,
+                            TaskRunRecord.task_id,
                         )
-                        record.idempotency_key = "run-migrated:a"
-        finally:
-            await engine.dispose()
+                    )
+                    assert tuple(key_result.scalars()) == (
+                        "run-123:charge",
+                        "run-123:email",
+                        "run-456:charge",
+                    )
 
-    asyncio.run(verify())
+                async with session_factory() as session:
+                    workflow = WorkflowDefinition(
+                        id="wf-migrated",
+                        name="Migrated",
+                        tasks=(
+                            TaskDefinition(id="charge"),
+                            TaskDefinition(id="email"),
+                        ),
+                    )
+                    loaded = await WorkflowRunRepository(session).get(
+                        "run-123",
+                        workflow,
+                    )
+                    assert (
+                        loaded.task_runs["charge"].idempotency_key
+                        == "run-123:charge"
+                    )
+
+                async with session_factory() as session:
+                    with pytest.raises(IntegrityError):
+                        async with session.begin():
+                            record = await session.get(
+                                TaskRunRecord,
+                                ("run-123", "email"),
+                            )
+                            record.idempotency_key = "run-123:charge"
+            finally:
+                await engine.dispose()
+
+        asyncio.run(verify())
+    finally:
+        asyncio.run(reset_alembic_schema())

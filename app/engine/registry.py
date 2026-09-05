@@ -82,14 +82,24 @@ class TaskRegistry:
                 "expected either no parameters or exactly one context parameter.",
             )
 
-        required = [
-            parameter
-            for parameter in parameters
-            if parameter.default is inspect.Parameter.empty
-        ]
-        if len(parameters) == 0:
+        try:
+            signature.bind()
+        except TypeError:
+            can_bind_zero_args = False
+        else:
+            can_bind_zero_args = True
+
+        if can_bind_zero_args:
             accepts_context = False
-        elif len(parameters) == 1 and len(required) == 1:
+        elif (
+            len(parameters) == 1
+            and parameters[0].default is inspect.Parameter.empty
+            and parameters[0].kind
+            in {
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            }
+        ):
             accepts_context = True
         else:
             raise InvalidTaskCallableError(

@@ -98,6 +98,29 @@ def test_context_sync_task_receives_deterministic_identity() -> None:
     assert observed == ["run-1:a"]
 
 
+def test_lambda_captured_default_executes_as_zero_argument_task() -> None:
+    calls = []
+    implementations = {
+        task_id: (lambda task_id=task_id: calls.append(task_id))
+        for task_id in ("a", "b")
+    }
+
+    execute(workflow(task("a"), task("b")), implementations)
+
+    assert sorted(calls) == ["a", "b"]
+
+
+def test_optional_positional_parameter_executes_with_zero_arguments() -> None:
+    observed = []
+
+    def task_a(context=None) -> None:
+        observed.append(context)
+
+    execute(workflow(task("a")), {"a": task_a})
+
+    assert observed == [None]
+
+
 def test_context_exposes_no_database_or_repository_handles() -> None:
     context = TaskExecutionContext(
         workflow_id="workflow",
@@ -171,6 +194,30 @@ def test_invalid_required_keyword_only_callable_rejected_before_invocation() -> 
 
     def invalid(*, context) -> None:
         calls.append(context)
+
+    with pytest.raises(InvalidTaskCallableError):
+        execute(workflow(task("a")), {"a": invalid})
+
+    assert calls == []
+
+
+def test_varargs_callable_rejected_before_invocation() -> None:
+    calls = []
+
+    def invalid(*args) -> None:
+        calls.append(args)
+
+    with pytest.raises(InvalidTaskCallableError):
+        execute(workflow(task("a")), {"a": invalid})
+
+    assert calls == []
+
+
+def test_varkwargs_callable_rejected_before_invocation() -> None:
+    calls = []
+
+    def invalid(**kwargs) -> None:
+        calls.append(kwargs)
 
     with pytest.raises(InvalidTaskCallableError):
         execute(workflow(task("a")), {"a": invalid})
