@@ -149,3 +149,31 @@ class DispatchStateError(DispatchError):
             f"Dispatch state for run '{run_id}' task '{task_id}' is invalid: "
             f"{reason}"
         )
+
+
+class WorkerLeaseError(Exception):
+    """Base exception for worker lease ownership failures."""
+
+
+class LeaseClaimError(WorkerLeaseError):
+    def __init__(self, run_id: str, task_id: str, reason: str) -> None:
+        super().__init__(
+            f"Could not claim run '{run_id}' task '{task_id}': {reason}"
+        )
+
+
+class LeaseLostError(WorkerLeaseError):
+    def __init__(self, run_id: str, task_id: str, reason: str) -> None:
+        super().__init__(f"Lease lost for run '{run_id}' task '{task_id}': {reason}")
+
+
+class LeaseStateError(WorkerLeaseError):
+    def __init__(self, run_id: str, task_id: str, reason: str) -> None:
+        super().__init__(
+            f"Lease state for run '{run_id}' task '{task_id}' is invalid: {reason}"
+        )
+
+
+class InvalidWorkerLeaseConfigurationError(WorkerLeaseError):
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"Invalid worker lease configuration: {reason}")

@@ -110,10 +110,20 @@ class TaskAttemptRecord(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_type: Mapped[str | None] = mapped_column(String(255))
     error_message: Mapped[str | None] = mapped_column(String(1024))
+    worker_id: Mapped[str | None] = mapped_column(String(255))
+    lease_token: Mapped[str | None] = mapped_column(String(255))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 Index(
     "ix_task_runs_status_next_retry_at",
     TaskRunRecord.status,
     TaskRunRecord.next_retry_at,
+)
+
+Index(
+    "ix_task_attempts_status_lease_expires_at",
+    TaskAttemptRecord.status,
+    TaskAttemptRecord.lease_expires_at,
 )

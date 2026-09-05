@@ -49,6 +49,10 @@ class TaskAttempt:
     finished_at: datetime | None = None
     error_type: str | None = None
     error_message: str | None = None
+    worker_id: str | None = None
+    lease_token: str | None = None
+    lease_expires_at: datetime | None = None
+    last_heartbeat_at: datetime | None = None
 
     @property
     def attempt_key(self) -> str:
@@ -201,17 +205,29 @@ class WorkflowRun:
 
         self._status = WorkflowStatus.CANCELLED
 
-    def interrupt_running_tasks_for_recovery(self) -> tuple[str, ...]:
+    def interrupt_running_tasks_for_recovery(
+        self,
+        exclude_task_ids: set[str] | None = None,
+    ) -> tuple[str, ...]:
         if self._status != WorkflowStatus.RUNNING:
             return ()
 
+        excluded = exclude_task_ids or set()
         interrupted = tuple(
             sorted(
                 task_id
                 for task_id, task_run in self._task_runs.items()
                 if task_run.status == TaskStatus.RUNNING
+                and task_id not in excluded
             )
         )
+        return self.interrupt_tasks_for_recovery(interrupted)
+
+    def interrupt_tasks_for_recovery(
+        self,
+        task_ids: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        interrupted = tuple(sorted(task_ids))
         for task_id in interrupted:
             self._task_runs[task_id] = TaskRun(
                 task_id=task_id,

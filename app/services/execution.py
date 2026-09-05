@@ -8,6 +8,8 @@ from app.engine.dag import WorkflowDAG
 from app.engine.exceptions import (
     ExecutionPersistenceError,
     InvalidConcurrencyLimitError,
+    LeaseClaimError,
+    LeaseLostError,
     WorkflowNotFoundError,
     WorkflowRunAlreadyExistsError,
 )
@@ -17,6 +19,7 @@ from app.engine.registry import TaskCallable, TaskRegistry
 from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
 from app.schemas.workflow import WorkflowDefinition
 from app.services.repositories import (
+    ExpiredTaskAttemptRef,
     TaskAttemptRepository,
     WorkflowRepository,
     WorkflowRunRepository,
@@ -99,6 +102,157 @@ class _InMemoryTaskAttemptRepository:
         attempts[attempt.attempt_number - 1] = replacement
         return replacement
 
+    async def claim_dispatched_attempt(
+        self,
+        workflow_run: WorkflowRun,
+        attempt: TaskAttempt,
+        worker_id: str,
+        lease_token: str,
+        now: datetime,
+        lease_seconds: float,
+    ) -> TaskAttempt:
+        current = self._attempts[(attempt.run_id, attempt.task_id)][
+            attempt.attempt_number - 1
+        ]
+        if current.status != AttemptStatus.DISPATCHED:
+            raise LeaseClaimError(attempt.run_id, attempt.task_id, "not DISPATCHED.")
+        if self._run_repository is not None:
+            await self._run_repository.save_state(workflow_run)
+        leased = TaskAttempt(
+            run_id=attempt.run_id,
+            workflow_id=attempt.workflow_id,
+            task_id=attempt.task_id,
+            attempt_number=attempt.attempt_number,
+            status=AttemptStatus.RUNNING,
+            started_at=now,
+            worker_id=worker_id,
+            lease_token=lease_token,
+            last_heartbeat_at=now,
+            lease_expires_at=now + timedelta(seconds=lease_seconds),
+        )
+        self._attempts[(attempt.run_id, attempt.task_id)][
+            attempt.attempt_number - 1
+        ] = leased
+        return leased
+
+    async def heartbeat(
+        self,
+        run_id: str,
+        task_id: str,
+        attempt_number: int,
+        worker_id: str,
+        lease_token: str,
+        now: datetime,
+        lease_seconds: float,
+    ) -> None:
+        attempt = self._attempts[(run_id, task_id)][attempt_number - 1]
+        if (
+            attempt.status != AttemptStatus.RUNNING
+            or attempt.worker_id != worker_id
+            or attempt.lease_token != lease_token
+        ):
+            raise LeaseLostError(run_id, task_id, "lease token does not match.")
+        self._attempts[(run_id, task_id)][attempt_number - 1] = TaskAttempt(
+            run_id=attempt.run_id,
+            workflow_id=attempt.workflow_id,
+            task_id=attempt.task_id,
+            attempt_number=attempt.attempt_number,
+            status=attempt.status,
+            started_at=attempt.started_at,
+            finished_at=attempt.finished_at,
+            error_type=attempt.error_type,
+            error_message=attempt.error_message,
+            worker_id=attempt.worker_id,
+            lease_token=attempt.lease_token,
+            lease_expires_at=now + timedelta(seconds=lease_seconds),
+            last_heartbeat_at=now,
+        )
+
+    async def finish_leased_attempt(
+        self,
+        workflow_run: WorkflowRun,
+        attempt: TaskAttempt,
+        status: AttemptStatus,
+        finished_at: datetime,
+        *,
+        error_type: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        current = self._attempts[(attempt.run_id, attempt.task_id)][
+            attempt.attempt_number - 1
+        ]
+        if (
+            current.status != AttemptStatus.RUNNING
+            or current.worker_id != attempt.worker_id
+            or current.lease_token != attempt.lease_token
+        ):
+            raise LeaseLostError(
+                attempt.run_id,
+                attempt.task_id,
+                "lease token does not authorize completion.",
+            )
+        await self.finish_attempt(
+            workflow_run,
+            attempt,
+            status,
+            finished_at,
+            error_type=error_type,
+            error_message=error_message,
+        )
+
+    async def list_expired_running_attempts(
+        self,
+        now: datetime,
+    ) -> tuple[ExpiredTaskAttemptRef, ...]:
+        return tuple(
+            ExpiredTaskAttemptRef(
+                run_id=attempt.run_id,
+                workflow_id=attempt.workflow_id,
+                task_id=attempt.task_id,
+                attempt_number=attempt.attempt_number,
+                worker_id=attempt.worker_id,
+                lease_token=attempt.lease_token,
+            )
+            for attempts in self._attempts.values()
+            for attempt in attempts
+            if attempt.status == AttemptStatus.RUNNING
+            and attempt.lease_expires_at is not None
+            and attempt.lease_expires_at < now
+        )
+
+    async def reclaim_expired_attempt(
+        self,
+        workflow_run: WorkflowRun,
+        attempt_ref: ExpiredTaskAttemptRef,
+        now: datetime,
+    ) -> bool:
+        current = self._attempts[(attempt_ref.run_id, attempt_ref.task_id)][
+            attempt_ref.attempt_number - 1
+        ]
+        if (
+            current.status != AttemptStatus.RUNNING
+            or current.lease_token != attempt_ref.lease_token
+            or current.lease_expires_at is None
+            or current.lease_expires_at >= now
+        ):
+            return False
+        if self._run_repository is not None:
+            await self._run_repository.save_state(workflow_run)
+        self._attempts[(attempt_ref.run_id, attempt_ref.task_id)][
+            attempt_ref.attempt_number - 1
+        ] = TaskAttempt(
+            run_id=current.run_id,
+            workflow_id=current.workflow_id,
+            task_id=current.task_id,
+            attempt_number=current.attempt_number,
+            status=AttemptStatus.INTERRUPTED,
+            started_at=current.started_at,
+            finished_at=now,
+            error_type=current.error_type,
+            error_message=current.error_message,
+        )
+        return True
+
     async def finish_attempt(
         self,
         workflow_run: WorkflowRun,
@@ -144,6 +298,7 @@ class _InMemoryTaskAttemptRepository:
         self,
         workflow_run: WorkflowRun,
         finished_at: datetime,
+        task_ids: tuple[str, ...] | None = None,
     ) -> None:
         if self._run_repository is not None:
             await self._run_repository.save_state(workflow_run)
@@ -151,6 +306,8 @@ class _InMemoryTaskAttemptRepository:
         for key, attempts in self._attempts.items():
             attempt_run_id, _ = key
             if attempt_run_id != workflow_run.run_id:
+                continue
+            if task_ids is not None and key[1] not in task_ids:
                 continue
 
             self._attempts[key] = [

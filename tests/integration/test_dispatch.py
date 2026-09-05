@@ -16,6 +16,7 @@ if not test_database_name.endswith("_test"):
 
 # ruff: noqa: E402
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -24,10 +25,11 @@ from app.db.base import Base
 from app.dispatch.messages import TaskDispatchMessage
 from app.dispatch.transport import InMemoryTaskDispatcher
 from app.engine.context import TaskExecutionContext
-from app.engine.exceptions import DispatchError, DispatchStateError
+from app.engine.exceptions import DispatchError, DispatchStateError, LeaseLostError
 from app.engine.execution import WorkflowRun
 from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
 from app.schemas.workflow import RetryPolicy, TaskDefinition, WorkflowDefinition
+from app.services.leases import LeaseReaper
 from app.services.recovery import WorkflowRecoveryService
 from app.services.repositories import (
     TaskAttemptRepository,
@@ -150,6 +152,43 @@ def test_worker_success_persists_and_unlocks_dependent_without_dispatching_it() 
     run_in_db(body)
 
 
+def test_worker_claim_persists_lease_before_callable_starts() -> None:
+    async def body(session):
+        definition = workflow("wf-lease-claim", task("a"))
+        await persist_run(session, definition)
+        dispatcher = InMemoryTaskDispatcher()
+        await WorkflowScheduler(
+            WorkflowRepository(session),
+            WorkflowRunRepository(session),
+            TaskAttemptRepository(session),
+            dispatcher,
+        ).dispatch_ready("run-1")
+        observed = []
+
+        async def task_a() -> None:
+            attempts = await TaskAttemptRepository(session).list_attempts("run-1", "a")
+            observed.append(attempts[0])
+
+        await TaskWorker(
+            WorkflowRepository(session),
+            WorkflowRunRepository(session),
+            TaskAttemptRepository(session),
+            dispatcher,
+            {"a": task_a},
+            worker_id="worker-1",
+            lease_seconds=1,
+            heartbeat_seconds=0.1,
+        ).run_once(timeout=0.1)
+
+        assert observed[0].status == AttemptStatus.RUNNING
+        assert observed[0].worker_id == "worker-1"
+        assert observed[0].lease_token
+        assert observed[0].lease_expires_at is not None
+        assert observed[0].last_heartbeat_at is not None
+
+    run_in_db(body)
+
+
 def test_worker_failure_with_retry_persists_retry_waiting_without_sleeping() -> None:
     async def body(session):
         definition = workflow(
@@ -190,6 +229,60 @@ def test_worker_failure_with_retry_persists_retry_waiting_without_sleeping() -> 
     run_in_db(body)
 
 
+def test_heartbeat_extends_lease_and_wrong_token_is_rejected() -> None:
+    async def body(session):
+        definition = workflow("wf-heartbeat", task("a"))
+        await persist_run(session, definition)
+        dispatcher = InMemoryTaskDispatcher()
+        summary = await WorkflowScheduler(
+            WorkflowRepository(session),
+            WorkflowRunRepository(session),
+            TaskAttemptRepository(session),
+            dispatcher,
+        ).dispatch_ready("run-1")
+        attempt_repo = TaskAttemptRepository(session)
+        run = await WorkflowRunRepository(session).get("run-1", definition)
+        attempt = (await attempt_repo.list_attempts("run-1", "a"))[0]
+        run.start_dispatched_task("a")
+        claimed = await attempt_repo.claim_dispatched_attempt(
+            run,
+            attempt,
+            "worker-1",
+            "token-1",
+            datetime.now(UTC),
+            1,
+        )
+
+        before = claimed.lease_expires_at
+        heartbeat_at = datetime.now(UTC) + timedelta(seconds=1)
+        await attempt_repo.heartbeat(
+            "run-1",
+            "a",
+            1,
+            "worker-1",
+            "token-1",
+            heartbeat_at,
+            5,
+        )
+        after = (await attempt_repo.list_attempts("run-1", "a"))[0]
+
+        assert summary.dispatched_task_ids == ("a",)
+        assert after.lease_expires_at > before
+        assert after.last_heartbeat_at == heartbeat_at
+        with pytest.raises(LeaseLostError):
+            await attempt_repo.heartbeat(
+                "run-1",
+                "a",
+                1,
+                "worker-1",
+                "wrong",
+                datetime.now(UTC),
+                5,
+            )
+
+    run_in_db(body)
+
+
 def test_duplicate_message_does_not_rerun_successful_attempt() -> None:
     async def body(session):
         definition = workflow("wf-duplicate-message", task("a"))
@@ -216,6 +309,97 @@ def test_duplicate_message_does_not_rerun_successful_attempt() -> None:
             await worker.process_message(message)
 
         assert calls == ["a"]
+
+    run_in_db(body)
+
+
+def test_expired_lease_reclaim_interrupts_and_fences_stale_worker() -> None:
+    async def body(session):
+        definition = workflow("wf-reclaim", task("a"))
+        await persist_run(session, definition)
+        dispatcher = InMemoryTaskDispatcher()
+        await WorkflowScheduler(
+            WorkflowRepository(session),
+            WorkflowRunRepository(session),
+            TaskAttemptRepository(session),
+            dispatcher,
+        ).dispatch_ready("run-1")
+        attempt_repo = TaskAttemptRepository(session)
+        run_repo = WorkflowRunRepository(session)
+        run = await run_repo.get("run-1", definition)
+        attempt = (await attempt_repo.list_attempts("run-1", "a"))[0]
+        run.start_dispatched_task("a")
+        claimed = await attempt_repo.claim_dispatched_attempt(
+            run,
+            attempt,
+            "worker-a",
+            "token-a",
+            datetime.now(UTC) - timedelta(seconds=10),
+            1,
+        )
+
+        reclaimed = await LeaseReaper(
+            WorkflowRepository(session),
+            run_repo,
+            attempt_repo,
+        ).reclaim_expired()
+        stale_run = WorkflowRun.restore(
+            run_id="run-1",
+            workflow=definition,
+            status=WorkflowStatus.RUNNING,
+            task_statuses={"a": TaskStatus.RUNNING},
+        )
+        stale_run.complete_task("a")
+
+        with pytest.raises(LeaseLostError):
+            await attempt_repo.finish_leased_attempt(
+                stale_run,
+                claimed,
+                AttemptStatus.SUCCEEDED,
+                datetime.now(UTC),
+            )
+        loaded = await run_repo.get("run-1", definition)
+        attempts = await attempt_repo.list_attempts("run-1", "a")
+
+        assert reclaimed[0].task_status == TaskStatus.INTERRUPTED
+        assert loaded.status == WorkflowStatus.FAILED
+        assert loaded.get_task_status("a") == TaskStatus.INTERRUPTED
+        assert attempts[0].status == AttemptStatus.INTERRUPTED
+
+    run_in_db(body)
+
+
+def test_active_lease_is_not_reclaimed() -> None:
+    async def body(session):
+        definition = workflow("wf-active-lease", task("a"))
+        await persist_run(session, definition)
+        dispatcher = InMemoryTaskDispatcher()
+        await WorkflowScheduler(
+            WorkflowRepository(session),
+            WorkflowRunRepository(session),
+            TaskAttemptRepository(session),
+            dispatcher,
+        ).dispatch_ready("run-1")
+        attempt_repo = TaskAttemptRepository(session)
+        run = await WorkflowRunRepository(session).get("run-1", definition)
+        attempt = (await attempt_repo.list_attempts("run-1", "a"))[0]
+        run.start_dispatched_task("a")
+        await attempt_repo.claim_dispatched_attempt(
+            run,
+            attempt,
+            "worker-a",
+            "token-a",
+            datetime.now(UTC),
+            60,
+        )
+
+        reclaimed = await LeaseReaper(
+            WorkflowRepository(session),
+            WorkflowRunRepository(session),
+            attempt_repo,
+        ).reclaim_expired()
+
+        assert reclaimed == ()
 
     run_in_db(body)
 

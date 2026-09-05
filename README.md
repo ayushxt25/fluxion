@@ -98,22 +98,28 @@ survives process restart. Each task run has a durable deterministic
 context-aware task callables. Phase 10 adds a Redis-backed dispatch boundary:
 a scheduler can persist `DISPATCHED` task attempts and publish versioned JSON
 dispatch messages, while workers consume messages and resolve task
-implementations locally. PostgreSQL remains the source of truth; Redis is only
-transport. Empty workflows are rejected because a workflow with zero executable
-tasks is not meaningful.
+implementations locally. Phase 11 adds worker lease ownership, heartbeat
+renewal, lease-token fencing, and explicit expired-lease reclaim. PostgreSQL
+remains the source of truth; Redis is only transport. Empty workflows are
+rejected because a workflow with zero executable tasks is not meaningful.
 
-Execution and retries are currently single-process and local. Distributed
-workers, scheduling services, and Redis coordination are not implemented yet.
+The original direct executor remains single-process and local. Redis dispatch
+and worker services are currently a foundation, not a full distributed runtime.
 Interrupted tasks are not retried automatically, and recovery does not
 guarantee exactly-once effects for external side effects performed before a
 crash. The idempotency key is an identity primitive only; tasks are responsible
 for using it with external systems. Concurrent multi-process resume is not
-supported because Fluxion does not yet have leases or distributed ownership.
-Phase 10 does not provide leases, heartbeats, worker-death recovery,
-transactional outbox semantics, or exactly-once execution. Database and Redis
-publishing are not atomic; a failed publish may leave a stranded `DISPATCHED`
-task for a future reconciliation phase. Duplicate Redis delivery may occur, and
-workers reject messages that do not match durable PostgreSQL state.
+supported; Fluxion does not yet provide distributed run ownership or resume
+coordination.
+Fluxion still does not provide a transactional outbox or exactly-once execution.
+Database and Redis publishing are not atomic; a failed publish may leave a
+stranded `DISPATCHED` task for a future reconciliation phase. Duplicate Redis
+delivery may occur, and workers reject messages that do not match durable
+PostgreSQL state. Expired leases are treated conservatively: the attempt and
+task become `INTERRUPTED` and the workflow becomes `FAILED`; Fluxion does not
+automatically retry ambiguous work. Stale workers cannot commit after lease loss
+because terminal attempt updates require the current lease token. There is no
+automatic scheduler or lease-reaper daemon yet.
 
 For Phase 2, a failed task or individually cancelled task marks the workflow run
 as failed because successful completion is no longer possible. Explicit workflow

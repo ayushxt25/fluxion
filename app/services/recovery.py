@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from types import MappingProxyType
 
 from app.engine.exceptions import RecoveryStateError
-from app.engine.status import TaskStatus, WorkflowStatus
+from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
 from app.services.repositories import (
     TaskAttemptRepository,
     WorkflowRepository,
@@ -80,14 +80,21 @@ class WorkflowRecoveryService:
         previous_status = workflow_run.status
         now = datetime.now(UTC)
 
+        leased_running_task_ids = set()
         if self._attempt_repository is not None:
-            await self._validate_attempts(workflow_run)
+            leased_running_task_ids = await self._validate_attempts(workflow_run)
         workflow_run.reconcile_readiness_for_recovery(now)
-        interrupted_task_ids = workflow_run.interrupt_running_tasks_for_recovery()
+        interrupted_task_ids = workflow_run.interrupt_running_tasks_for_recovery(
+            leased_running_task_ids
+        )
         workflow_run.reconcile_readiness_for_recovery(now)
 
         if interrupted_task_ids and self._attempt_repository is not None:
-            await self._attempt_repository.interrupt_running_attempts(workflow_run, now)
+            await self._attempt_repository.interrupt_running_attempts(
+                workflow_run,
+                now,
+                interrupted_task_ids,
+            )
         else:
             await self._run_repository.save_state(workflow_run)
 
@@ -112,7 +119,7 @@ class WorkflowRecoveryService:
             ),
         )
 
-    async def _validate_attempts(self, workflow_run) -> None:
+    async def _validate_attempts(self, workflow_run) -> set[str]:
         attempts = await self._attempt_repository.list_run_attempts(workflow_run.run_id)
         by_task: dict[str, list] = {task_id: [] for task_id in workflow_run.task_runs}
         for attempt in attempts:
@@ -123,6 +130,7 @@ class WorkflowRecoveryService:
                 )
             by_task[attempt.task_id].append(attempt)
 
+        leased_running_task_ids = set()
         for task_id, task_attempts in by_task.items():
             numbers = [attempt.attempt_number for attempt in task_attempts]
             if numbers != list(range(1, len(numbers) + 1)):
@@ -134,12 +142,12 @@ class WorkflowRecoveryService:
             dispatched_attempts = [
                 attempt
                 for attempt in task_attempts
-                if attempt.status == "DISPATCHED"
+                if attempt.status == AttemptStatus.DISPATCHED
             ]
             running_attempts = [
                 attempt
                 for attempt in task_attempts
-                if attempt.status == "RUNNING"
+                if attempt.status == AttemptStatus.RUNNING
             ]
             if len(dispatched_attempts) > 1:
                 raise RecoveryStateError(
@@ -172,3 +180,47 @@ class WorkflowRecoveryService:
                     workflow_run.run_id,
                     f"task '{task_id}' has a RUNNING attempt while {task_status}.",
                 )
+            for attempt in task_attempts:
+                has_any_lease_metadata = any(
+                    (
+                        attempt.worker_id,
+                        attempt.lease_token,
+                        attempt.last_heartbeat_at,
+                        attempt.lease_expires_at,
+                    )
+                )
+                if (
+                    attempt.status != AttemptStatus.RUNNING
+                    and has_any_lease_metadata
+                ):
+                    raise RecoveryStateError(
+                        workflow_run.run_id,
+                        f"task '{task_id}' has lease metadata on a "
+                        f"{attempt.status} attempt.",
+                    )
+
+            for attempt in running_attempts:
+                has_lease = all(
+                    (
+                        attempt.worker_id,
+                        attempt.lease_token,
+                        attempt.last_heartbeat_at,
+                        attempt.lease_expires_at,
+                    )
+                )
+                has_any_lease_metadata = any(
+                    (
+                        attempt.worker_id,
+                        attempt.lease_token,
+                        attempt.last_heartbeat_at,
+                        attempt.lease_expires_at,
+                    )
+                )
+                if has_any_lease_metadata and not has_lease:
+                    raise RecoveryStateError(
+                        workflow_run.run_id,
+                        f"task '{task_id}' has incomplete lease metadata.",
+                    )
+                if has_lease:
+                    leased_running_task_ids.add(task_id)
+        return leased_running_task_ids

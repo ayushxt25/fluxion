@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -14,6 +14,8 @@ from app.db.models.workflow import (
 )
 from app.engine.dag import WorkflowDAG
 from app.engine.exceptions import (
+    LeaseClaimError,
+    LeaseLostError,
     PersistenceError,
     RecoveryStateError,
     UnknownTaskRunError,
@@ -31,6 +33,16 @@ from app.schemas.workflow import RetryPolicy, TaskDefinition, WorkflowDefinition
 class IncompleteWorkflowRunRef:
     run_id: str
     workflow_id: str
+
+
+@dataclass(frozen=True)
+class ExpiredTaskAttemptRef:
+    run_id: str
+    workflow_id: str
+    task_id: str
+    attempt_number: int
+    worker_id: str | None
+    lease_token: str | None
 
 
 class WorkflowRepository:
@@ -371,6 +383,171 @@ class TaskAttemptRepository:
             started_at=started_at,
         )
 
+    async def claim_dispatched_attempt(
+        self,
+        workflow_run: WorkflowRun,
+        attempt: TaskAttempt,
+        worker_id: str,
+        lease_token: str,
+        now: datetime,
+        lease_seconds: float,
+    ) -> TaskAttempt:
+        async with self._session.begin():
+            record = await self._session.get(
+                TaskAttemptRecord,
+                (attempt.run_id, attempt.task_id, attempt.attempt_number),
+                with_for_update=True,
+            )
+            if record is None or record.status != AttemptStatus.DISPATCHED.value:
+                raise LeaseClaimError(
+                    attempt.run_id,
+                    attempt.task_id,
+                    "attempt is not DISPATCHED.",
+                )
+            await self._save_workflow_state(workflow_run)
+            record.status = AttemptStatus.RUNNING.value
+            record.started_at = now
+            record.worker_id = worker_id
+            record.lease_token = lease_token
+            record.last_heartbeat_at = now
+            record.lease_expires_at = _add_seconds(now, lease_seconds)
+        return TaskAttempt(
+            run_id=attempt.run_id,
+            workflow_id=attempt.workflow_id,
+            task_id=attempt.task_id,
+            attempt_number=attempt.attempt_number,
+            status=AttemptStatus.RUNNING,
+            started_at=now,
+            worker_id=worker_id,
+            lease_token=lease_token,
+            last_heartbeat_at=now,
+            lease_expires_at=_add_seconds(now, lease_seconds),
+        )
+
+    async def heartbeat(
+        self,
+        run_id: str,
+        task_id: str,
+        attempt_number: int,
+        worker_id: str,
+        lease_token: str,
+        now: datetime,
+        lease_seconds: float,
+    ) -> None:
+        async with self._session.begin():
+            record = await self._session.get(
+                TaskAttemptRecord,
+                (run_id, task_id, attempt_number),
+                with_for_update=True,
+            )
+            if (
+                record is None
+                or record.status != AttemptStatus.RUNNING.value
+                or record.worker_id != worker_id
+                or record.lease_token != lease_token
+            ):
+                raise LeaseLostError(run_id, task_id, "lease token does not match.")
+            record.last_heartbeat_at = now
+            record.lease_expires_at = _add_seconds(now, lease_seconds)
+
+    async def finish_leased_attempt(
+        self,
+        workflow_run: WorkflowRun,
+        attempt: TaskAttempt,
+        status: AttemptStatus,
+        finished_at: datetime,
+        *,
+        error_type: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        async with self._session.begin():
+            record = await self._session.get(
+                TaskAttemptRecord,
+                (attempt.run_id, attempt.task_id, attempt.attempt_number),
+                with_for_update=True,
+            )
+            if (
+                record is None
+                or record.status != AttemptStatus.RUNNING.value
+                or record.worker_id != attempt.worker_id
+                or record.lease_token != attempt.lease_token
+            ):
+                raise LeaseLostError(
+                    attempt.run_id,
+                    attempt.task_id,
+                    "lease token does not authorize completion.",
+                )
+            await self._save_workflow_state(workflow_run)
+            record.status = status.value
+            record.finished_at = finished_at
+            record.error_type = error_type
+            record.error_message = error_message
+            record.worker_id = None
+            record.lease_token = None
+            record.lease_expires_at = None
+            record.last_heartbeat_at = None
+
+    async def list_expired_running_attempts(
+        self,
+        now: datetime,
+    ) -> tuple[ExpiredTaskAttemptRef, ...]:
+        async with self._session.begin():
+            result = await self._session.execute(
+                select(TaskAttemptRecord)
+                .where(TaskAttemptRecord.status == AttemptStatus.RUNNING.value)
+                .where(TaskAttemptRecord.lease_expires_at.is_not(None))
+                .where(TaskAttemptRecord.lease_expires_at < now)
+                .order_by(
+                    TaskAttemptRecord.run_id,
+                    TaskAttemptRecord.task_id,
+                    TaskAttemptRecord.attempt_number,
+                )
+            )
+            return tuple(
+                ExpiredTaskAttemptRef(
+                    run_id=record.run_id,
+                    workflow_id=record.workflow_id,
+                    task_id=record.task_id,
+                    attempt_number=record.attempt_number,
+                    worker_id=record.worker_id,
+                    lease_token=record.lease_token,
+                )
+                for record in result.scalars()
+            )
+
+    async def reclaim_expired_attempt(
+        self,
+        workflow_run: WorkflowRun,
+        attempt_ref: ExpiredTaskAttemptRef,
+        now: datetime,
+    ) -> bool:
+        async with self._session.begin():
+            record = await self._session.get(
+                TaskAttemptRecord,
+                (
+                    attempt_ref.run_id,
+                    attempt_ref.task_id,
+                    attempt_ref.attempt_number,
+                ),
+                with_for_update=True,
+            )
+            if (
+                record is None
+                or record.status != AttemptStatus.RUNNING.value
+                or record.lease_token != attempt_ref.lease_token
+                or record.lease_expires_at is None
+                or record.lease_expires_at >= now
+            ):
+                return False
+            await self._save_workflow_state(workflow_run)
+            record.status = AttemptStatus.INTERRUPTED.value
+            record.finished_at = now
+            record.worker_id = None
+            record.lease_token = None
+            record.lease_expires_at = None
+            record.last_heartbeat_at = None
+        return True
+
     async def finish_attempt(
         self,
         workflow_run: WorkflowRun,
@@ -419,6 +596,10 @@ class TaskAttemptRepository:
                     finished_at=record.finished_at,
                     error_type=record.error_type,
                     error_message=record.error_message,
+                    worker_id=record.worker_id,
+                    lease_token=record.lease_token,
+                    lease_expires_at=record.lease_expires_at,
+                    last_heartbeat_at=record.last_heartbeat_at,
                 )
                 for record in result.scalars()
             )
@@ -441,6 +622,10 @@ class TaskAttemptRepository:
                     finished_at=record.finished_at,
                     error_type=record.error_type,
                     error_message=record.error_message,
+                    worker_id=record.worker_id,
+                    lease_token=record.lease_token,
+                    lease_expires_at=record.lease_expires_at,
+                    last_heartbeat_at=record.last_heartbeat_at,
                 )
                 for record in result.scalars()
             )
@@ -449,18 +634,21 @@ class TaskAttemptRepository:
         self,
         workflow_run: WorkflowRun,
         finished_at: datetime,
+        task_ids: tuple[str, ...] | None = None,
     ) -> None:
         async with self._session.begin():
             await self._save_workflow_state(workflow_run)
-            result = await self._session.execute(
+            query = (
                 select(TaskAttemptRecord)
                 .where(TaskAttemptRecord.run_id == workflow_run.run_id)
                 .where(TaskAttemptRecord.status == AttemptStatus.RUNNING.value)
             )
+            if task_ids is not None:
+                query = query.where(TaskAttemptRecord.task_id.in_(task_ids))
+            result = await self._session.execute(query)
             for record in result.scalars():
                 record.status = AttemptStatus.INTERRUPTED.value
                 record.finished_at = finished_at
-
     async def _save_workflow_state(self, workflow_run: WorkflowRun) -> None:
         result = await self._session.execute(
             select(WorkflowRunRecord)
@@ -486,3 +674,7 @@ class TaskAttemptRepository:
             task_records[task_id].idempotency_key = (
                 task_run.idempotency_key or f"{workflow_run.run_id}:{task_id}"
             )
+
+
+def _add_seconds(value: datetime, seconds: float) -> datetime:
+    return value + timedelta(seconds=seconds)

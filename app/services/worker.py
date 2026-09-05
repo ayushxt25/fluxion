@@ -1,12 +1,19 @@
 import asyncio
 import inspect
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
+from app.core.config import get_settings
 from app.dispatch.messages import TaskDispatchMessage
 from app.dispatch.transport import TaskDispatcher
 from app.engine.context import TaskExecutionContext
-from app.engine.exceptions import DispatchStateError
+from app.engine.exceptions import (
+    DispatchStateError,
+    InvalidWorkerLeaseConfigurationError,
+    LeaseLostError,
+)
 from app.engine.execution import TaskAttempt, WorkflowRun
 from app.engine.registry import TaskCallable, TaskRegistry
 from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
@@ -38,7 +45,34 @@ class TaskWorker:
         attempt_repository: TaskAttemptRepository,
         dispatcher: TaskDispatcher,
         task_registry: TaskRegistry | dict[str, TaskCallable],
+        *,
+        worker_id: str | None = None,
+        lease_seconds: float | None = None,
+        heartbeat_seconds: float | None = None,
     ) -> None:
+        settings = get_settings()
+        self.worker_id = worker_id or str(uuid4())
+        self._lease_seconds = (
+            lease_seconds
+            if lease_seconds is not None
+            else settings.worker_lease_seconds
+        )
+        self._heartbeat_seconds = (
+            heartbeat_seconds
+            if heartbeat_seconds is not None
+            else settings.worker_heartbeat_seconds
+        )
+        if self._lease_seconds <= 0:
+            raise InvalidWorkerLeaseConfigurationError(
+                "lease duration must be positive."
+            )
+        if (
+            self._heartbeat_seconds <= 0
+            or self._heartbeat_seconds >= self._lease_seconds
+        ):
+            raise InvalidWorkerLeaseConfigurationError(
+                "heartbeat interval must be positive and less than lease duration."
+            )
         self._workflow_repository = workflow_repository
         self._run_repository = run_repository
         self._attempt_repository = attempt_repository
@@ -64,22 +98,29 @@ class TaskWorker:
         attempt = await self._load_and_validate(message, workflow, workflow_run)
         self._registry.binding(message.task_id)
 
+        lease_token = str(uuid4())
+        now = datetime.now(UTC)
         workflow_run.start_dispatched_task(message.task_id)
-        running_attempt = await self._attempt_repository.start_dispatched_attempt(
+        running_attempt = await self._attempt_repository.claim_dispatched_attempt(
             workflow_run,
             attempt,
-            datetime.now(UTC),
+            self.worker_id,
+            lease_token,
+            now,
+            self._lease_seconds,
         )
 
         error: str | None = None
         try:
-            await self._call_task(message, running_attempt, workflow_run)
+            await self._call_task_with_heartbeat(message, running_attempt, workflow_run)
         except Exception as exc:  # noqa: BLE001
+            if isinstance(exc, LeaseLostError):
+                raise
             error = f"{type(exc).__name__}: {exc}"
 
         if error is None:
             workflow_run.complete_task(message.task_id)
-            await self._attempt_repository.finish_attempt(
+            await self._attempt_repository.finish_leased_attempt(
                 workflow_run,
                 running_attempt,
                 AttemptStatus.SUCCEEDED,
@@ -97,7 +138,7 @@ class TaskWorker:
                 workflow_run.fail_task(message.task_id)
             else:
                 workflow_run.schedule_retry(message.task_id, retry_at)
-            await self._attempt_repository.finish_attempt(
+            await self._attempt_repository.finish_leased_attempt(
                 workflow_run,
                 running_attempt,
                 AttemptStatus.FAILED,
@@ -176,6 +217,55 @@ class TaskWorker:
                 f"attempt is {attempt.status}, not DISPATCHED.",
             )
         return attempt
+
+    async def _call_task_with_heartbeat(
+        self,
+        message: TaskDispatchMessage,
+        attempt: TaskAttempt,
+        workflow_run: WorkflowRun,
+    ) -> None:
+        callable_task = asyncio.create_task(
+            self._call_task(message, attempt, workflow_run)
+        )
+        heartbeat_task = asyncio.create_task(
+            self._heartbeat_until_done(message, attempt, callable_task)
+        )
+        done, _ = await asyncio.wait(
+            {callable_task, heartbeat_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if heartbeat_task in done:
+            heartbeat_error = heartbeat_task.exception()
+            if heartbeat_error is not None:
+                callable_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await callable_task
+                raise heartbeat_error
+        else:
+            heartbeat_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat_task
+        await callable_task
+
+    async def _heartbeat_until_done(
+        self,
+        message: TaskDispatchMessage,
+        attempt: TaskAttempt,
+        callable_task: asyncio.Task[None],
+    ) -> None:
+        while not callable_task.done():
+            await asyncio.sleep(self._heartbeat_seconds)
+            if callable_task.done():
+                return
+            await self._attempt_repository.heartbeat(
+                message.run_id,
+                message.task_id,
+                message.attempt_number,
+                self.worker_id,
+                attempt.lease_token,
+                datetime.now(UTC),
+                self._lease_seconds,
+            )
 
     async def _call_task(
         self,
