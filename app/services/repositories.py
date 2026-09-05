@@ -318,6 +318,59 @@ class TaskAttemptRepository:
             )
         return attempt
 
+    async def create_dispatched_attempt(
+        self,
+        workflow_run: WorkflowRun,
+        task_id: str,
+        attempt_number: int,
+    ) -> TaskAttempt:
+        attempt = TaskAttempt(
+            run_id=workflow_run.run_id,
+            workflow_id=workflow_run.workflow_id,
+            task_id=task_id,
+            attempt_number=attempt_number,
+            status=AttemptStatus.DISPATCHED,
+        )
+        async with self._session.begin():
+            await self._save_workflow_state(workflow_run)
+            self._session.add(
+                TaskAttemptRecord(
+                    run_id=attempt.run_id,
+                    workflow_id=attempt.workflow_id,
+                    task_id=attempt.task_id,
+                    attempt_number=attempt.attempt_number,
+                    status=attempt.status.value,
+                )
+            )
+        return attempt
+
+    async def start_dispatched_attempt(
+        self,
+        workflow_run: WorkflowRun,
+        attempt: TaskAttempt,
+        started_at: datetime,
+    ) -> TaskAttempt:
+        async with self._session.begin():
+            await self._save_workflow_state(workflow_run)
+            record = await self._session.get(
+                TaskAttemptRecord,
+                (attempt.run_id, attempt.task_id, attempt.attempt_number),
+            )
+            if record is None:
+                raise PersistenceError(
+                    f"Task attempt '{attempt.attempt_key}' was not found."
+                )
+            record.status = AttemptStatus.RUNNING.value
+            record.started_at = started_at
+        return TaskAttempt(
+            run_id=attempt.run_id,
+            workflow_id=attempt.workflow_id,
+            task_id=attempt.task_id,
+            attempt_number=attempt.attempt_number,
+            status=AttemptStatus.RUNNING,
+            started_at=started_at,
+        )
+
     async def finish_attempt(
         self,
         workflow_run: WorkflowRun,

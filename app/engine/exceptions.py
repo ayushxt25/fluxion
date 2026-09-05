@@ -132,3 +132,20 @@ class RecoveryStateError(Exception):
 class WorkflowRunNotResumableError(Exception):
     def __init__(self, run_id: str, reason: str) -> None:
         super().__init__(f"Workflow run '{run_id}' is not resumable: {reason}")
+
+
+class DispatchError(Exception):
+    """Base exception for dispatch transport and state failures."""
+
+
+class InvalidDispatchMessageError(DispatchError):
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"Invalid dispatch message: {reason}")
+
+
+class DispatchStateError(DispatchError):
+    def __init__(self, run_id: str, task_id: str, reason: str) -> None:
+        super().__init__(
+            f"Dispatch state for run '{run_id}' task '{task_id}' is invalid: "
+            f"{reason}"
+        )

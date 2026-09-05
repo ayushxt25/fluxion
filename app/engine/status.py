@@ -4,6 +4,7 @@ from enum import StrEnum
 class TaskStatus(StrEnum):
     BLOCKED = "BLOCKED"
     READY = "READY"
+    DISPATCHED = "DISPATCHED"
     RETRY_WAITING = "RETRY_WAITING"
     RUNNING = "RUNNING"
     SUCCEEDED = "SUCCEEDED"
@@ -38,6 +39,7 @@ class WorkflowStatus(StrEnum):
 
 
 class AttemptStatus(StrEnum):
+    DISPATCHED = "DISPATCHED"
     RUNNING = "RUNNING"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"

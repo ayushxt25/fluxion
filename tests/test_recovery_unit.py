@@ -154,6 +154,26 @@ def test_running_workflow_with_no_running_tasks_remains_resumable() -> None:
     assert result.resumable is True
 
 
+def test_dispatched_task_remains_ambiguous_and_not_resumable() -> None:
+    async def scenario():
+        definition = workflow(task("a"))
+        run = restored_run(
+            definition,
+            WorkflowStatus.RUNNING,
+            {"a": TaskStatus.DISPATCHED},
+        )
+        return await WorkflowRecoveryService(
+            FakeWorkflowRepository(definition),
+            FakeRunRepository(run),
+        ).recover_run("run-1", "workflow")
+
+    result = asyncio.run(scenario())
+
+    assert result.task_statuses["a"] == TaskStatus.DISPATCHED
+    assert result.recovered_status == WorkflowStatus.RUNNING
+    assert result.resumable is False
+
+
 def test_readiness_is_recomputed_safely() -> None:
     async def scenario():
         definition = workflow(task("a"), task("b", ("a",)), task("c", ("b",)))

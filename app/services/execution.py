@@ -61,6 +61,44 @@ class _InMemoryTaskAttemptRepository:
         self._attempts.setdefault((workflow_run.run_id, task_id), []).append(attempt)
         return attempt
 
+    async def create_dispatched_attempt(
+        self,
+        workflow_run: WorkflowRun,
+        task_id: str,
+        attempt_number: int,
+    ) -> TaskAttempt:
+        if self._run_repository is not None:
+            await self._run_repository.save_state(workflow_run)
+        attempt = TaskAttempt(
+            run_id=workflow_run.run_id,
+            workflow_id=workflow_run.workflow_id,
+            task_id=task_id,
+            attempt_number=attempt_number,
+            status=AttemptStatus.DISPATCHED,
+        )
+        self._attempts.setdefault((workflow_run.run_id, task_id), []).append(attempt)
+        return attempt
+
+    async def start_dispatched_attempt(
+        self,
+        workflow_run: WorkflowRun,
+        attempt: TaskAttempt,
+        started_at: datetime,
+    ) -> TaskAttempt:
+        if self._run_repository is not None:
+            await self._run_repository.save_state(workflow_run)
+        replacement = TaskAttempt(
+            run_id=attempt.run_id,
+            workflow_id=attempt.workflow_id,
+            task_id=attempt.task_id,
+            attempt_number=attempt.attempt_number,
+            status=AttemptStatus.RUNNING,
+            started_at=started_at,
+        )
+        attempts = self._attempts[(attempt.run_id, attempt.task_id)]
+        attempts[attempt.attempt_number - 1] = replacement
+        return replacement
+
     async def finish_attempt(
         self,
         workflow_run: WorkflowRun,

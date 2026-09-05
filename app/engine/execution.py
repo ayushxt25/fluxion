@@ -14,7 +14,12 @@ from app.schemas.workflow import WorkflowDefinition
 
 _VALID_TASK_TRANSITIONS = {
     TaskStatus.BLOCKED: {TaskStatus.READY, TaskStatus.CANCELLED},
-    TaskStatus.READY: {TaskStatus.RUNNING, TaskStatus.CANCELLED},
+    TaskStatus.READY: {
+        TaskStatus.DISPATCHED,
+        TaskStatus.RUNNING,
+        TaskStatus.CANCELLED,
+    },
+    TaskStatus.DISPATCHED: {TaskStatus.RUNNING, TaskStatus.CANCELLED},
     TaskStatus.RUNNING: {
         TaskStatus.SUCCEEDED,
         TaskStatus.FAILED,
@@ -143,6 +148,16 @@ class WorkflowRun:
         self._transition_task(task_id, TaskStatus.RUNNING)
         self._status = WorkflowStatus.RUNNING
 
+    def dispatch_task(self, task_id: str) -> None:
+        self._ensure_workflow_can_advance()
+        self._transition_task(task_id, TaskStatus.DISPATCHED)
+        self._status = WorkflowStatus.RUNNING
+
+    def start_dispatched_task(self, task_id: str) -> None:
+        self._ensure_workflow_can_advance()
+        self._transition_task(task_id, TaskStatus.RUNNING)
+        self._status = WorkflowStatus.RUNNING
+
     def complete_task(self, task_id: str) -> None:
         workflow_already_failed = self._status == WorkflowStatus.FAILED
         self._ensure_task_can_finish(task_id)
@@ -217,7 +232,10 @@ class WorkflowRun:
 
         for task_id in self._dag.topological_order():
             task_run = self._task_runs[task_id]
-            if task_run.status.is_terminal or task_run.status == TaskStatus.RUNNING:
+            if task_run.status.is_terminal or task_run.status in {
+                TaskStatus.DISPATCHED,
+                TaskStatus.RUNNING,
+            }:
                 continue
             if task_run.status == TaskStatus.RETRY_WAITING:
                 if task_run.next_retry_at is None:

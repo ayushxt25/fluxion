@@ -12,6 +12,7 @@ from app.services.repositories import (
 )
 
 _NON_RESUMABLE_TASK_STATUSES = {
+    TaskStatus.DISPATCHED,
     TaskStatus.RUNNING,
     TaskStatus.INTERRUPTED,
     TaskStatus.FAILED,
@@ -130,19 +131,41 @@ class WorkflowRecoveryService:
                     f"attempt numbers for task '{task_id}' are not contiguous.",
                 )
 
-            running_attempts = [
-                attempt for attempt in task_attempts if attempt.status == "RUNNING"
+            dispatched_attempts = [
+                attempt
+                for attempt in task_attempts
+                if attempt.status == "DISPATCHED"
             ]
+            running_attempts = [
+                attempt
+                for attempt in task_attempts
+                if attempt.status == "RUNNING"
+            ]
+            if len(dispatched_attempts) > 1:
+                raise RecoveryStateError(
+                    workflow_run.run_id,
+                    f"task '{task_id}' has multiple dispatched attempts.",
+                )
             if len(running_attempts) > 1:
                 raise RecoveryStateError(
                     workflow_run.run_id,
                     f"task '{task_id}' has multiple running attempts.",
                 )
             task_status = workflow_run.get_task_status(task_id)
+            if task_status == TaskStatus.DISPATCHED and not dispatched_attempts:
+                raise RecoveryStateError(
+                    workflow_run.run_id,
+                    f"task '{task_id}' is DISPATCHED without a DISPATCHED attempt.",
+                )
             if task_status == TaskStatus.RUNNING and not running_attempts:
                 raise RecoveryStateError(
                     workflow_run.run_id,
                     f"task '{task_id}' is RUNNING without a RUNNING attempt.",
+                )
+            if dispatched_attempts and task_status != TaskStatus.DISPATCHED:
+                raise RecoveryStateError(
+                    workflow_run.run_id,
+                    f"task '{task_id}' has a DISPATCHED attempt while {task_status}.",
                 )
             if running_attempts and task_status != TaskStatus.RUNNING:
                 raise RecoveryStateError(

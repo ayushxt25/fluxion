@@ -95,8 +95,12 @@ tasks. Ordinary callable failures can be retried according to each task's
 policy, with durable attempt history and `next_retry_at` state so retry timing
 survives process restart. Each task run has a durable deterministic
 `idempotency_key`, and each attempt exposes a deterministic `attempt_key` to
-context-aware task callables. Empty workflows are rejected because a workflow
-with zero executable tasks is not meaningful.
+context-aware task callables. Phase 10 adds a Redis-backed dispatch boundary:
+a scheduler can persist `DISPATCHED` task attempts and publish versioned JSON
+dispatch messages, while workers consume messages and resolve task
+implementations locally. PostgreSQL remains the source of truth; Redis is only
+transport. Empty workflows are rejected because a workflow with zero executable
+tasks is not meaningful.
 
 Execution and retries are currently single-process and local. Distributed
 workers, scheduling services, and Redis coordination are not implemented yet.
@@ -105,6 +109,11 @@ guarantee exactly-once effects for external side effects performed before a
 crash. The idempotency key is an identity primitive only; tasks are responsible
 for using it with external systems. Concurrent multi-process resume is not
 supported because Fluxion does not yet have leases or distributed ownership.
+Phase 10 does not provide leases, heartbeats, worker-death recovery,
+transactional outbox semantics, or exactly-once execution. Database and Redis
+publishing are not atomic; a failed publish may leave a stranded `DISPATCHED`
+task for a future reconciliation phase. Duplicate Redis delivery may occur, and
+workers reject messages that do not match durable PostgreSQL state.
 
 For Phase 2, a failed task or individually cancelled task marks the workflow run
 as failed because successful completion is no longer possible. Explicit workflow
