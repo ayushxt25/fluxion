@@ -80,6 +80,11 @@ class DuplicateTaskImplementationError(TaskImplementationError):
         super().__init__(f"Task '{task_id}' already has a registered implementation.")
 
 
+class InvalidTaskCallableError(TaskImplementationError):
+    def __init__(self, task_id: str, reason: str) -> None:
+        super().__init__(f"Task '{task_id}' has an invalid callable: {reason}")
+
+
 class InvalidConcurrencyLimitError(TaskImplementationError):
     def __init__(self, max_concurrency: int) -> None:
         super().__init__(

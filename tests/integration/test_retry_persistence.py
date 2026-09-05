@@ -18,12 +18,14 @@ if not test_database_name.endswith("_test"):
 import asyncio
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db import models  # noqa: F401
 from app.db.base import Base
-from app.db.models.execution import TaskAttemptRecord
+from app.db.models.execution import TaskAttemptRecord, TaskRunRecord
+from app.engine.context import TaskExecutionContext
 from app.engine.execution import WorkflowRun
 from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
 from app.schemas.workflow import RetryPolicy, TaskDefinition, WorkflowDefinition
@@ -97,15 +99,103 @@ def test_retry_attempt_rows_persist_and_final_success_matches_db() -> None:
         ).run()
         attempts = await TaskAttemptRepository(session).list_attempts("run-1", "a")
         loaded = await WorkflowRunRepository(session).get("run-1", definition)
+        task_run = loaded.task_runs["a"]
 
         assert result.status == WorkflowStatus.SUCCEEDED
         assert loaded.status == WorkflowStatus.SUCCEEDED
+        assert task_run.idempotency_key == "run-1:a"
         assert [attempt.status for attempt in attempts] == [
             AttemptStatus.FAILED,
             AttemptStatus.SUCCEEDED,
         ]
         assert attempts[0].error_type == "RuntimeError"
         assert attempts[0].error_message == "boom"
+
+    run_in_db(body)
+
+
+def test_context_identity_persists_across_retries() -> None:
+    async def body(session):
+        definition = workflow(
+            "wf-context-retry",
+            task("a", retry_policy=RetryPolicy(max_attempts=2)),
+        )
+        await WorkflowRepository(session).save(definition)
+        observed = []
+        calls = 0
+
+        def flaky(context: TaskExecutionContext) -> None:
+            nonlocal calls
+            calls += 1
+            observed.append(
+                (
+                    context.attempt_number,
+                    context.attempt_key,
+                    context.idempotency_key,
+                )
+            )
+            if calls == 1:
+                raise RuntimeError("boom")
+
+        await PersistentWorkflowExecutor(
+            definition,
+            {"a": flaky},
+            WorkflowRepository(session),
+            WorkflowRunRepository(session),
+            TaskAttemptRepository(session),
+            run_id="run-1",
+        ).run()
+        loaded = await WorkflowRunRepository(session).get("run-1", definition)
+
+        assert observed == [
+            (1, "run-1:a:1", "run-1:a"),
+            (2, "run-1:a:2", "run-1:a"),
+        ]
+        assert loaded.task_runs["a"].idempotency_key == "run-1:a"
+
+    run_in_db(body)
+
+
+def test_separate_tasks_and_runs_get_unique_idempotency_keys() -> None:
+    async def body(session):
+        definition = workflow("wf-keys", task("a"), task("b"))
+        await WorkflowRepository(session).save(definition)
+        await WorkflowRunRepository(session).create(
+            WorkflowRun.create("run-1", definition)
+        )
+        await WorkflowRunRepository(session).create(
+            WorkflowRun.create("run-2", definition)
+        )
+
+        result = await session.execute(
+            select(TaskRunRecord.idempotency_key).order_by(
+                TaskRunRecord.run_id,
+                TaskRunRecord.task_id,
+            )
+        )
+
+        assert tuple(result.scalars()) == (
+            "run-1:a",
+            "run-1:b",
+            "run-2:a",
+            "run-2:b",
+        )
+
+    run_in_db(body)
+
+
+def test_duplicate_idempotency_key_is_prevented() -> None:
+    async def body(session):
+        definition = workflow("wf-duplicate-key", task("a"), task("b"))
+        await WorkflowRepository(session).save(definition)
+        await WorkflowRunRepository(session).create(
+            WorkflowRun.create("run-1", definition)
+        )
+
+        with pytest.raises(IntegrityError):
+            async with session.begin():
+                record = await session.get(TaskRunRecord, ("run-1", "b"))
+                record.idempotency_key = "run-1:a"
 
     run_in_db(body)
 

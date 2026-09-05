@@ -3,13 +3,14 @@ from datetime import UTC, datetime
 
 import pytest
 
+from app.engine.context import TaskExecutionContext
 from app.engine.exceptions import (
     ExecutionPersistenceError,
     MissingTaskImplementationError,
     WorkflowRunNotResumableError,
 )
 from app.engine.execution import WorkflowRun
-from app.engine.status import TaskStatus, WorkflowStatus
+from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
 from app.schemas.workflow import TaskDefinition, WorkflowDefinition
 from app.services.execution import _InMemoryTaskAttemptRepository
 from app.services.repositories import IncompleteWorkflowRunRef
@@ -123,6 +124,48 @@ def test_resume_running_run_does_not_rerun_succeeded_task() -> None:
 
     assert result.status == WorkflowStatus.SUCCEEDED
     assert calls == ["b"]
+
+
+def test_resume_context_preserves_run_id_and_continues_attempt_number() -> None:
+    async def scenario():
+        definition = workflow(task("a"), task("b", ("a",)))
+        run = restored_run(
+            definition,
+            WorkflowStatus.RUNNING,
+            {"a": TaskStatus.SUCCEEDED, "b": TaskStatus.READY},
+        )
+        repository = FakeRunRepository(run)
+        attempts = _InMemoryTaskAttemptRepository(repository)
+        await attempts.create_running_attempt(run, "a", 1, datetime.now(UTC))
+        await attempts.finish_attempt(
+            run,
+            (await attempts.list_attempts("run-1", "a"))[0],
+            AttemptStatus.SUCCEEDED,
+            datetime.now(UTC),
+        )
+        observed = []
+
+        def task_b(context: TaskExecutionContext) -> None:
+            observed.append(context)
+
+        result = await WorkflowResumeService(
+            FakeWorkflowRepository(definition),
+            repository,
+            attempts,
+        ).resume_run("run-1", {"b": task_b})
+        return result, observed
+
+    result, observed = asyncio.run(scenario())
+
+    assert result.status == WorkflowStatus.SUCCEEDED
+    assert observed[0] == TaskExecutionContext(
+        workflow_id="workflow",
+        run_id="run-1",
+        task_id="b",
+        attempt_number=1,
+        attempt_key="run-1:b:1",
+        idempotency_key="run-1:b",
+    )
 
 
 def test_blocked_task_waits_for_resumed_dependency_completion() -> None:

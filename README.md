@@ -13,7 +13,9 @@ workflow definitions, workflow run state, and durable local execution
 transitions. Fluxion can also recover persisted local crash states by marking
 abandoned `RUNNING` tasks as `INTERRUPTED` and can safely resume unambiguous
 incomplete durable runs. Task execution now records explicit attempts with
-configurable retry policy and deterministic exponential backoff.
+configurable retry policy and deterministic exponential backoff. Task callables
+can also receive an immutable execution context containing stable attempt and
+task idempotency identities.
 
 ## Planned Capabilities
 
@@ -91,15 +93,18 @@ can continue `PENDING` or `RUNNING` durable runs that contain no `RUNNING`,
 `SUCCEEDED` tasks are not rerun; execution continues from persisted `READY`
 tasks. Ordinary callable failures can be retried according to each task's
 policy, with durable attempt history and `next_retry_at` state so retry timing
-survives process restart. Empty workflows are rejected because a workflow with
-zero executable tasks is not meaningful.
+survives process restart. Each task run has a durable deterministic
+`idempotency_key`, and each attempt exposes a deterministic `attempt_key` to
+context-aware task callables. Empty workflows are rejected because a workflow
+with zero executable tasks is not meaningful.
 
 Execution and retries are currently single-process and local. Distributed
 workers, scheduling services, and Redis coordination are not implemented yet.
 Interrupted tasks are not retried automatically, and recovery does not
 guarantee exactly-once effects for external side effects performed before a
-crash. Concurrent multi-process resume is not supported because Fluxion does not
-yet have leases or distributed ownership.
+crash. The idempotency key is an identity primitive only; tasks are responsible
+for using it with external systems. Concurrent multi-process resume is not
+supported because Fluxion does not yet have leases or distributed ownership.
 
 For Phase 2, a failed task or individually cancelled task marks the workflow run
 as failed because successful completion is no longer possible. Explicit workflow

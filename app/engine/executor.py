@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from uuid import uuid4
 
+from app.engine.context import TaskExecutionContext
 from app.engine.dag import WorkflowDAG
 from app.engine.exceptions import InvalidConcurrencyLimitError
 from app.engine.execution import WorkflowRun
@@ -115,11 +116,24 @@ class WorkflowExecutor:
         return None
 
     async def _call_task(self, task_id: str) -> None:
-        implementation = self._registry.get(task_id)
-        if inspect.iscoroutinefunction(implementation):
-            await implementation()
+        binding = self._registry.binding(task_id)
+        arguments = ()
+        if binding.accepts_context:
+            arguments = (
+                TaskExecutionContext(
+                    workflow_id=self._run.workflow_id,
+                    run_id=self._run.run_id,
+                    task_id=task_id,
+                    attempt_number=1,
+                    attempt_key=f"{self._run.run_id}:{task_id}:1",
+                    idempotency_key=f"{self._run.run_id}:{task_id}",
+                ),
+            )
+
+        if binding.is_async:
+            await binding.implementation(*arguments)
         else:
-            result = await asyncio.to_thread(implementation)
+            result = await asyncio.to_thread(binding.implementation, *arguments)
             if inspect.isawaitable(result):
                 await result
 

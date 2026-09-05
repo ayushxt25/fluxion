@@ -60,6 +60,10 @@ class TaskRunRecord(Base):
             "task_id",
             name="uq_task_runs_run_workflow_task",
         ),
+        UniqueConstraint(
+            "idempotency_key",
+            name="uq_task_runs_idempotency_key",
+        ),
     )
 
     run_id: Mapped[str] = mapped_column(String(255), primary_key=True)
@@ -67,6 +71,7 @@ class TaskRunRecord(Base):
     task_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    idempotency_key: Mapped[str] = mapped_column(String(768), nullable=False)
 
     workflow_run: Mapped[WorkflowRunRecord] = relationship(
         back_populates="task_runs",

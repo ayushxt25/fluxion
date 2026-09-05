@@ -30,6 +30,7 @@ class TaskRun:
     task_id: str
     status: TaskStatus
     next_retry_at: datetime | None = None
+    idempotency_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,7 @@ class WorkflowRun:
                 status=TaskStatus.READY
                 if task_id in self._dag.roots
                 else TaskStatus.BLOCKED,
+                idempotency_key=f"{run_id}:{task_id}",
             )
             for task_id in self._dag.topological_order()
         }
@@ -87,6 +89,7 @@ class WorkflowRun:
         status: WorkflowStatus,
         task_statuses: dict[str, TaskStatus],
         next_retry_at: dict[str, datetime | None] | None = None,
+        idempotency_keys: dict[str, str] | None = None,
         dag: WorkflowDAG | None = None,
     ) -> "WorkflowRun":
         workflow_dag = dag or WorkflowDAG(workflow)
@@ -106,6 +109,10 @@ class WorkflowRun:
                 task_id=task_id,
                 status=task_statuses[task_id],
                 next_retry_at=(next_retry_at or {}).get(task_id),
+                idempotency_key=(idempotency_keys or {}).get(
+                    task_id,
+                    f"{run_id}:{task_id}",
+                ),
             )
             for task_id in workflow_dag.topological_order()
         }
@@ -174,6 +181,7 @@ class WorkflowRun:
                 self._task_runs[task_run.task_id] = TaskRun(
                     task_id=task_run.task_id,
                     status=TaskStatus.CANCELLED,
+                    idempotency_key=task_run.idempotency_key,
                 )
 
         self._status = WorkflowStatus.CANCELLED
@@ -193,6 +201,7 @@ class WorkflowRun:
             self._task_runs[task_id] = TaskRun(
                 task_id=task_id,
                 status=TaskStatus.INTERRUPTED,
+                idempotency_key=self._task_runs[task_id].idempotency_key,
             )
 
         if interrupted:
@@ -232,6 +241,7 @@ class WorkflowRun:
                     task_id=task_id,
                     status=next_status,
                     next_retry_at=None,
+                    idempotency_key=task_run.idempotency_key,
                 )
 
     def _validate_recoverable_state(self) -> None:
@@ -301,6 +311,7 @@ class WorkflowRun:
             task_id=task_id,
             status=next_status,
             next_retry_at=next_retry_at,
+            idempotency_key=task_run.idempotency_key,
         )
 
     def _unlock_ready_dependents(self, task_id: str) -> None:

@@ -162,6 +162,8 @@ class WorkflowRunRepository:
                             task_id=task_id,
                             status=task_run.status.value,
                             next_retry_at=task_run.next_retry_at,
+                            idempotency_key=task_run.idempotency_key
+                            or f"{workflow_run.run_id}:{task_id}",
                         )
                         for task_id, task_run in workflow_run.task_runs.items()
                     ]
@@ -193,6 +195,10 @@ class WorkflowRunRepository:
                     task_run.task_id: task_run.next_retry_at
                     for task_run in record.task_runs
                 }
+                idempotency_keys = {
+                    task_run.task_id: task_run.idempotency_key
+                    for task_run in record.task_runs
+                }
             except ValueError as exc:
                 raise RecoveryStateError(
                     run_id,
@@ -206,6 +212,7 @@ class WorkflowRunRepository:
                     status=workflow_status,
                     task_statuses=task_statuses,
                     next_retry_at=next_retry_at,
+                    idempotency_keys=idempotency_keys,
                 )
             except UnknownTaskRunError as exc:
                 raise RecoveryStateError(
@@ -267,6 +274,9 @@ class WorkflowRunRepository:
             for task_id, task_run in workflow_run.task_runs.items():
                 task_records[task_id].status = task_run.status.value
                 task_records[task_id].next_retry_at = task_run.next_retry_at
+                task_records[task_id].idempotency_key = (
+                    task_run.idempotency_key or f"{workflow_run.run_id}:{task_id}"
+                )
 
 
 class TaskAttemptRepository:
@@ -420,3 +430,6 @@ class TaskAttemptRepository:
         for task_id, task_run in workflow_run.task_runs.items():
             task_records[task_id].status = task_run.status.value
             task_records[task_id].next_retry_at = task_run.next_retry_at
+            task_records[task_id].idempotency_key = (
+                task_run.idempotency_key or f"{workflow_run.run_id}:{task_id}"
+            )

@@ -3,6 +3,7 @@ import inspect
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from app.engine.context import TaskExecutionContext
 from app.engine.dag import WorkflowDAG
 from app.engine.exceptions import (
     ExecutionPersistenceError,
@@ -267,7 +268,7 @@ class _DurableWorkflowRunner:
                     self._run.run_id,
                     f"starting attempt for task '{task_id}'",
                 ) from exc
-            task = asyncio.create_task(self._execute_task(task_id))
+            task = asyncio.create_task(self._execute_task(task_id, attempt))
             running[task] = (task_id, attempt)
 
     def _open_slots(self, running_count: int) -> int:
@@ -337,9 +338,13 @@ class _DurableWorkflowRunner:
                 f"finishing attempt for task '{task_id}'",
             ) from exc
 
-    async def _execute_task(self, task_id: str) -> tuple[str, str | None]:
+    async def _execute_task(
+        self,
+        task_id: str,
+        attempt: TaskAttempt,
+    ) -> tuple[str, str | None]:
         try:
-            await self._call_task(task_id)
+            await self._call_task(task_id, attempt)
         except Exception as exc:  # noqa: BLE001
             return task_id, f"{type(exc).__name__}: {exc}"
         return task_id, None
@@ -384,12 +389,27 @@ class _DurableWorkflowRunner:
         await self._sleeper.sleep(delay)
         return True
 
-    async def _call_task(self, task_id: str) -> None:
-        implementation = self._registry.get(task_id)
-        if inspect.iscoroutinefunction(implementation):
-            await implementation()
+    async def _call_task(self, task_id: str, attempt: TaskAttempt) -> None:
+        binding = self._registry.binding(task_id)
+        arguments = ()
+        if binding.accepts_context:
+            task_run = self._run.task_runs[task_id]
+            arguments = (
+                TaskExecutionContext(
+                    workflow_id=self._run.workflow_id,
+                    run_id=self._run.run_id,
+                    task_id=task_id,
+                    attempt_number=attempt.attempt_number,
+                    attempt_key=attempt.attempt_key,
+                    idempotency_key=task_run.idempotency_key
+                    or f"{self._run.run_id}:{task_id}",
+                ),
+            )
+
+        if binding.is_async:
+            await binding.implementation(*arguments)
         else:
-            result = await asyncio.to_thread(implementation)
+            result = await asyncio.to_thread(binding.implementation, *arguments)
             if inspect.isawaitable(result):
                 await result
 
