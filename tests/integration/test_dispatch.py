@@ -25,7 +25,12 @@ from app.db.base import Base
 from app.dispatch.messages import TaskDispatchMessage
 from app.dispatch.transport import InMemoryTaskDispatcher
 from app.engine.context import TaskExecutionContext
-from app.engine.exceptions import DispatchError, DispatchStateError, LeaseLostError
+from app.engine.exceptions import (
+    DispatchError,
+    DispatchStateError,
+    LeaseLostError,
+    PersistenceError,
+)
 from app.engine.execution import WorkflowRun
 from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
 from app.schemas.workflow import RetryPolicy, TaskDefinition, WorkflowDefinition
@@ -159,6 +164,84 @@ def test_outbox_publisher_publishes_and_marks_event() -> None:
         assert result.published_event_ids == summary.outbox_event_ids
         assert message == summary.messages[0]
         assert unpublished == ()
+
+    run_in_db(body)
+
+
+def test_outbox_claim_prevents_second_live_claim_and_expires() -> None:
+    async def body(session):
+        definition = workflow("wf-outbox-claim", task("a"))
+        await persist_run(session, definition)
+        await WorkflowScheduler(
+            WorkflowRepository(session),
+            WorkflowRunRepository(session),
+            TaskAttemptRepository(session),
+            InMemoryTaskDispatcher(),
+        ).dispatch_ready("run-1")
+        outbox = DispatchOutboxRepository(session)
+        now = datetime.now(UTC)
+
+        first = await outbox.claim_unpublished("publisher-a", "token-a", now, 60, 1)
+        second = await outbox.claim_unpublished(
+            "publisher-b",
+            "token-b",
+            now,
+            60,
+            1,
+        )
+        reclaimed = await outbox.claim_unpublished(
+            "publisher-b",
+            "token-b",
+            now + timedelta(seconds=61),
+            60,
+            1,
+        )
+
+        assert first[0].claimed_by == "publisher-a"
+        assert first[0].claim_token == "token-a"
+        assert second == ()
+        assert reclaimed[0].claimed_by == "publisher-b"
+        assert reclaimed[0].claim_token == "token-b"
+
+    run_in_db(body)
+
+
+def test_stale_outbox_claim_cannot_mark_published_after_reclaim() -> None:
+    async def body(session):
+        definition = workflow("wf-outbox-fencing", task("a"))
+        await persist_run(session, definition)
+        await WorkflowScheduler(
+            WorkflowRepository(session),
+            WorkflowRunRepository(session),
+            TaskAttemptRepository(session),
+            InMemoryTaskDispatcher(),
+        ).dispatch_ready("run-1")
+        outbox = DispatchOutboxRepository(session)
+        now = datetime.now(UTC)
+        first = await outbox.claim_unpublished("publisher-a", "token-a", now, 1, 1)
+        second = await outbox.claim_unpublished(
+            "publisher-b",
+            "token-b",
+            now + timedelta(seconds=2),
+            60,
+            1,
+        )
+
+        with pytest.raises(PersistenceError):
+            await outbox.mark_published(
+                first[0].id,
+                datetime.now(UTC),
+                publisher_id="publisher-a",
+                claim_token="token-a",
+            )
+        await outbox.mark_published(
+            second[0].id,
+            datetime.now(UTC),
+            publisher_id="publisher-b",
+            claim_token="token-b",
+        )
+
+        assert await outbox.list_unpublished() == ()
 
     run_in_db(body)
 

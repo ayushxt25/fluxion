@@ -148,6 +148,10 @@ class DispatchOutboxRecord(Base):
         nullable=False,
     )
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claimed_by: Mapped[str | None] = mapped_column(String(255))
+    claim_token: Mapped[str | None] = mapped_column(String(255))
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     publish_attempts: Mapped[int] = mapped_column(
         Integer,
         nullable=False,
@@ -171,6 +175,14 @@ Index(
 
 Index(
     "ix_dispatch_outbox_unpublished_created",
+    DispatchOutboxRecord.created_at,
+    DispatchOutboxRecord.id,
+    postgresql_where=DispatchOutboxRecord.published_at.is_(None),
+)
+
+Index(
+    "ix_dispatch_outbox_claimable",
+    DispatchOutboxRecord.claim_expires_at,
     DispatchOutboxRecord.created_at,
     DispatchOutboxRecord.id,
     postgresql_where=DispatchOutboxRecord.published_at.is_(None),

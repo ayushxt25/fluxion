@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     dispatch_queue_name: str = "fluxion:dispatch"
     worker_lease_seconds: float = 30
     worker_heartbeat_seconds: float = 10
+    scheduler_poll_seconds: float = 1.0
+    outbox_poll_seconds: float = 1.0
+    outbox_batch_size: int = 100
+    outbox_claim_seconds: float = 30
+    lease_reaper_interval_seconds: float = 5
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -31,6 +36,16 @@ class Settings(BaseSettings):
             raise ValueError(
                 "WORKER_HEARTBEAT_SECONDS must be less than WORKER_LEASE_SECONDS."
             )
+        if self.scheduler_poll_seconds <= 0:
+            raise ValueError("SCHEDULER_POLL_SECONDS must be positive.")
+        if self.outbox_poll_seconds <= 0:
+            raise ValueError("OUTBOX_POLL_SECONDS must be positive.")
+        if self.outbox_batch_size <= 0:
+            raise ValueError("OUTBOX_BATCH_SIZE must be positive.")
+        if self.outbox_claim_seconds <= 0:
+            raise ValueError("OUTBOX_CLAIM_SECONDS must be positive.")
+        if self.lease_reaper_interval_seconds <= 0:
+            raise ValueError("LEASE_REAPER_INTERVAL_SECONDS must be positive.")
         return self
 
 

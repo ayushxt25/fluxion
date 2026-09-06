@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from uuid import uuid4
 
 from app.dispatch.transport import TaskDispatcher
 from app.engine.exceptions import DispatchError
@@ -26,12 +27,26 @@ class DispatchOutboxPublisher:
         self,
         outbox_repository: DispatchOutboxRepository,
         dispatcher: TaskDispatcher,
+        *,
+        publisher_id: str | None = None,
+        claim_seconds: float = 30,
     ) -> None:
+        if claim_seconds <= 0:
+            raise ValueError("claim_seconds must be positive.")
+        self.publisher_id = publisher_id or str(uuid4())
+        self._claim_seconds = claim_seconds
         self._outbox_repository = outbox_repository
         self._dispatcher = dispatcher
 
     async def publish_pending(self, limit: int = 100) -> OutboxPublishResult:
-        events = await self._outbox_repository.list_unpublished(limit)
+        claim_token = str(uuid4())
+        events = await self._outbox_repository.claim_unpublished(
+            self.publisher_id,
+            claim_token,
+            datetime.now(UTC),
+            self._claim_seconds,
+            limit,
+        )
         published_event_ids = []
         failed_event_ids = []
 
@@ -42,6 +57,8 @@ class DispatchOutboxPublisher:
                 await self._outbox_repository.record_publish_failure(
                     event.id,
                     str(exc),
+                    publisher_id=self.publisher_id,
+                    claim_token=claim_token,
                 )
                 failed_event_ids.append(event.id)
                 continue
@@ -49,11 +66,18 @@ class DispatchOutboxPublisher:
                 await self._outbox_repository.record_publish_failure(
                     event.id,
                     str(exc),
+                    publisher_id=self.publisher_id,
+                    claim_token=claim_token,
                 )
                 failed_event_ids.append(event.id)
                 continue
 
-            await self._outbox_repository.mark_published(event.id, datetime.now(UTC))
+            await self._outbox_repository.mark_published(
+                event.id,
+                datetime.now(UTC),
+                publisher_id=self.publisher_id,
+                claim_token=claim_token,
+            )
             published_event_ids.append(event.id)
 
         return OutboxPublishResult(

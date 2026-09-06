@@ -16,7 +16,9 @@ incomplete durable runs. Task execution now records explicit attempts with
 configurable retry policy and deterministic exponential backoff. Task callables
 can also receive an immutable execution context containing stable attempt and
 task idempotency identities. Redis dispatch now uses a PostgreSQL transactional
-outbox so dispatch intent is durable before transport publication.
+outbox so dispatch intent is durable before transport publication. Long-running
+scheduler, outbox publisher, and lease reaper loops are available as explicit
+engine services.
 
 ## Planned Capabilities
 
@@ -99,11 +101,13 @@ survives process restart. Each task run has a durable deterministic
 context-aware task callables. Redis-backed dispatch is split across a scheduler,
 transactional dispatch outbox, explicit publisher, and worker. The scheduler
 persists `DISPATCHED` task attempts and matching outbox rows atomically; the
-publisher later sends versioned JSON messages to Redis. Phase 11 adds worker
-lease ownership, heartbeat renewal, lease-token fencing, and explicit
-expired-lease reclaim. PostgreSQL remains the source of truth; Redis is only
-transport. Empty workflows are rejected because a workflow with zero executable
-tasks is not meaningful.
+publisher later claims outbox rows and sends versioned JSON messages to Redis.
+Outbox claim tokens and expiry reduce duplicate concurrent publication while
+remaining retryable after publisher crashes. Phase 11 adds worker lease
+ownership, heartbeat renewal, lease-token fencing, and explicit expired-lease
+reclaim. PostgreSQL remains the source of truth; Redis is only transport. Empty
+workflows are rejected because a workflow with zero executable tasks is not
+meaningful.
 
 The original direct executor remains single-process and local. Redis dispatch
 and worker services are currently a foundation, not a full distributed runtime.
@@ -115,13 +119,15 @@ supported; Fluxion does not yet provide distributed run ownership or resume
 coordination. The outbox provides at-least-once publication intent, not
 exactly-once delivery or exactly-once execution. Redis message loss after an
 outbox row is marked published is not automatically detected, and concurrent
-outbox publishers are not coordinated yet. Duplicate Redis delivery may occur,
-and workers reject messages that do not match durable PostgreSQL state. Expired
-leases are treated conservatively: the attempt and task become `INTERRUPTED`
-and the workflow becomes `FAILED`; Fluxion does not automatically retry
-ambiguous work. Stale workers cannot commit after lease loss because terminal
-attempt updates require the current lease token. There is no automatic
-scheduler, publisher, or lease-reaper daemon yet.
+outbox publisher claims do not remove the publish/crash duplicate window.
+Duplicate Redis delivery may occur, and workers reject messages that do not
+match durable PostgreSQL state. Expired leases are treated conservatively: the
+attempt and task become `INTERRUPTED` and the workflow becomes `FAILED`;
+Fluxion does not automatically retry ambiguous work. Stale workers cannot
+commit after lease loss because terminal attempt updates require the current
+lease token. Service loops support graceful shutdown, but there is no
+Kubernetes/process supervisor, public API, or exactly-once execution guarantee
+yet.
 
 For Phase 2, a failed task or individually cancelled task marks the workflow run
 as failed because successful completion is no longer possible. Explicit workflow

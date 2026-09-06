@@ -64,6 +64,10 @@ class DispatchOutboxEvent:
     attempt_number: int
     created_at: datetime
     published_at: datetime | None
+    claimed_by: str | None
+    claim_token: str | None
+    claimed_at: datetime | None
+    claim_expires_at: datetime | None
     publish_attempts: int
     last_error: str | None
 
@@ -335,6 +339,19 @@ class DispatchOutboxRepository:
         event_id = str(uuid4())
         try:
             async with self._session.begin():
+                task_record = await self._session.get(
+                    TaskRunRecord,
+                    (workflow_run.run_id, task_id),
+                    with_for_update=True,
+                )
+                if task_record is None:
+                    raise PersistenceError(
+                        f"Task run '{workflow_run.run_id}:{task_id}' was not found."
+                    )
+                if task_record.status != TaskStatus.READY.value:
+                    raise PersistenceError(
+                        f"Task run '{workflow_run.run_id}:{task_id}' is not READY."
+                    )
                 await self._save_workflow_state(workflow_run)
                 self._session.add(
                     TaskAttemptRecord(
@@ -372,6 +389,10 @@ class DispatchOutboxRepository:
             attempt_number=message.attempt_number,
             created_at=created_at,
             published_at=None,
+            claimed_by=None,
+            claim_token=None,
+            claimed_at=None,
+            claim_expires_at=None,
             publish_attempts=0,
             last_error=None,
         )
@@ -389,22 +410,95 @@ class DispatchOutboxRepository:
             )
             return tuple(self._event_from_record(record) for record in result.scalars())
 
-    async def mark_published(self, event_id: str, published_at: datetime) -> None:
+    async def claim_unpublished(
+        self,
+        publisher_id: str,
+        claim_token: str,
+        now: datetime,
+        claim_seconds: float,
+        limit: int = 100,
+    ) -> tuple[DispatchOutboxEvent, ...]:
+        async with self._session.begin():
+            result = await self._session.execute(
+                select(DispatchOutboxRecord)
+                .where(DispatchOutboxRecord.published_at.is_(None))
+                .where(
+                    (DispatchOutboxRecord.claim_token.is_(None))
+                    | (DispatchOutboxRecord.claim_expires_at < now)
+                )
+                .order_by(DispatchOutboxRecord.created_at, DispatchOutboxRecord.id)
+                .limit(limit)
+                .with_for_update(skip_locked=True)
+            )
+            records = tuple(result.scalars())
+            for record in records:
+                record.claimed_by = publisher_id
+                record.claim_token = claim_token
+                record.claimed_at = now
+                record.claim_expires_at = _add_seconds(now, claim_seconds)
+            await self._session.flush()
+            return tuple(self._event_from_record(record) for record in records)
+
+    async def mark_published(
+        self,
+        event_id: str,
+        published_at: datetime,
+        *,
+        publisher_id: str | None = None,
+        claim_token: str | None = None,
+    ) -> None:
         async with self._session.begin():
             record = await self._session.get(DispatchOutboxRecord, event_id)
             if record is None:
                 raise PersistenceError(f"Dispatch outbox event '{event_id}' not found.")
+            if (
+                (publisher_id is not None or claim_token is not None)
+                and (
+                    record.claimed_by != publisher_id
+                    or record.claim_token != claim_token
+                    or record.published_at is not None
+                )
+            ):
+                raise PersistenceError(
+                    f"Dispatch outbox event '{event_id}' claim was lost."
+                )
             record.published_at = published_at
+            record.claimed_by = None
+            record.claim_token = None
+            record.claimed_at = None
+            record.claim_expires_at = None
             record.publish_attempts += 1
             record.last_error = None
 
-    async def record_publish_failure(self, event_id: str, error: str) -> None:
+    async def record_publish_failure(
+        self,
+        event_id: str,
+        error: str,
+        *,
+        publisher_id: str | None = None,
+        claim_token: str | None = None,
+    ) -> None:
         async with self._session.begin():
             record = await self._session.get(DispatchOutboxRecord, event_id)
             if record is None:
                 raise PersistenceError(f"Dispatch outbox event '{event_id}' not found.")
+            if (
+                (publisher_id is not None or claim_token is not None)
+                and (
+                    record.claimed_by != publisher_id
+                    or record.claim_token != claim_token
+                    or record.published_at is not None
+                )
+            ):
+                raise PersistenceError(
+                    f"Dispatch outbox event '{event_id}' claim was lost."
+                )
             record.publish_attempts += 1
             record.last_error = error
+            record.claimed_by = None
+            record.claim_token = None
+            record.claimed_at = None
+            record.claim_expires_at = None
 
     async def find_dispatched_attempts_missing_outbox(
         self,
@@ -444,6 +538,29 @@ class DispatchOutboxRepository:
             TaskDispatchMessage.from_json(message.to_json())
         except Exception as exc:
             raise InvalidOutboxPayloadError(record.id, "payload is invalid.") from exc
+        has_claim = any(
+            (
+                record.claimed_by,
+                record.claim_token,
+                record.claimed_at,
+                record.claim_expires_at,
+            )
+        )
+        has_complete_claim = all(
+            (
+                record.claimed_by,
+                record.claim_token,
+                record.claimed_at,
+                record.claim_expires_at,
+            )
+        )
+        if has_claim and not has_complete_claim:
+            raise InvalidOutboxPayloadError(record.id, "claim metadata is incomplete.")
+        if record.published_at is not None and has_claim:
+            raise InvalidOutboxPayloadError(
+                record.id,
+                "published event still has claim metadata.",
+            )
         return DispatchOutboxEvent(
             id=record.id,
             event_type=record.event_type,
@@ -454,6 +571,10 @@ class DispatchOutboxRepository:
             attempt_number=record.attempt_number,
             created_at=record.created_at,
             published_at=record.published_at,
+            claimed_by=record.claimed_by,
+            claim_token=record.claim_token,
+            claimed_at=record.claimed_at,
+            claim_expires_at=record.claim_expires_at,
             publish_attempts=record.publish_attempts,
             last_error=record.last_error,
         )

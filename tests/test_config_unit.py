@@ -18,3 +18,17 @@ def test_worker_lease_configuration_rejects_invalid_values() -> None:
         Settings(worker_heartbeat_seconds=0)
     with pytest.raises(ValidationError):
         Settings(worker_lease_seconds=10, worker_heartbeat_seconds=10)
+
+
+def test_service_loop_configuration_rejects_invalid_values() -> None:
+    invalid_values = (
+        {"scheduler_poll_seconds": 0},
+        {"outbox_poll_seconds": 0},
+        {"outbox_batch_size": 0},
+        {"outbox_claim_seconds": 0},
+        {"lease_reaper_interval_seconds": 0},
+    )
+
+    for values in invalid_values:
+        with pytest.raises(ValidationError):
+            Settings(**values)
