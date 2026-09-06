@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     app_name: str = "Fluxion"
     app_env: str = "development"
     debug: bool = True
+    api_host: str = "0.0.0.0"
+    api_port: int = 8000
     database_url: str = "postgresql+asyncpg://fluxion:fluxion@localhost:5432/fluxion"
     test_database_url: str | None = None
     redis_url: str = "redis://localhost:6379/0"
@@ -45,6 +47,8 @@ class Settings(BaseSettings):
     def validate_worker_lease_settings(self) -> "Settings":
         if self.worker_lease_seconds <= 0:
             raise ValueError("WORKER_LEASE_SECONDS must be positive.")
+        if self.api_port <= 0:
+            raise ValueError("API_PORT must be positive.")
         if self.worker_heartbeat_seconds <= 0:
             raise ValueError("WORKER_HEARTBEAT_SECONDS must be positive.")
         if self.worker_heartbeat_seconds >= self.worker_lease_seconds:

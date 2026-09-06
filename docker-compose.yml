@@ -1,0 +1,109 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fluxion}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fluxion}
+      POSTGRES_DB: ${POSTGRES_DB:-fluxion}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build: .
+    image: fluxion:local
+    command: ["alembic", "upgrade", "head"]
+    environment: &app-env
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fluxion}:${POSTGRES_PASSWORD:-fluxion}@postgres:5432/${POSTGRES_DB:-fluxion}
+      REDIS_URL: redis://redis:6379/0
+      DISPATCH_QUEUE_NAME: ${DISPATCH_QUEUE_NAME:-fluxion:dispatch}
+      AUTH_ENABLED: ${AUTH_ENABLED:-true}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      JWT_ISSUER: ${JWT_ISSUER:-fluxion}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-fluxion-api}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  api:
+    image: fluxion:local
+    build: .
+    command: ["fluxion-api"]
+    environment:
+      <<: *app-env
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+    ports:
+      - "8001:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  scheduler:
+    image: fluxion:local
+    build: .
+    command: ["fluxion-scheduler"]
+    environment: *app-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  publisher:
+    image: fluxion:local
+    build: .
+    command: ["fluxion-publisher"]
+    environment: *app-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  reaper:
+    image: fluxion:local
+    build: .
+    command: ["fluxion-reaper"]
+    environment: *app-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    image: fluxion:local
+    build: .
+    command: ["fluxion-worker"]
+    environment: *app-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  postgres-data:
+  redis-data:

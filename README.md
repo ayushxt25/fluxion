@@ -23,6 +23,9 @@ workflow definitions, durable run inspection, cancellation, recovery,
 continuation checks, and selected operational one-shot actions.
 Phase 17 adds structured request and engine logging, Prometheus-compatible
 process metrics at `/metrics`, and a readiness probe at `/ready`.
+Phase 18 adds process entrypoints and Docker Compose wiring for a local
+multi-process cluster with separate API, scheduler, publisher, reaper, worker,
+PostgreSQL, Redis, and migration roles.
 
 ## Planned Capabilities
 
@@ -64,10 +67,24 @@ alembic upgrade head
 Integration tests require `TEST_DATABASE_URL` and only run against databases
 whose name ends with `_test`.
 
-## Run The API
+## Run The Processes
+
+After installing the package, Fluxion exposes console scripts:
+
+- `fluxion-api`
+- `fluxion-scheduler`
+- `fluxion-publisher`
+- `fluxion-reaper`
+- `fluxion-worker`
+
+The equivalent grouped command is `fluxion api|scheduler|publisher|reaper|worker`.
+Each process loads settings once, configures logging once, opens shared
+PostgreSQL/Redis resources for its role, and shuts down on `SIGINT`/`SIGTERM`.
+
+`fluxion-api` runs Uvicorn with `API_HOST` and `API_PORT`:
 
 ```bash
-uvicorn app.main:app --reload
+fluxion-api
 ```
 
 Health check:
@@ -85,6 +102,43 @@ curl http://127.0.0.1:8000/ready
 Prometheus-compatible process metrics are exposed at `/metrics`. The endpoint
 uses low-cardinality labels such as HTTP method, route template, and status; it
 does not label metrics by run ID, workflow ID, task ID, request ID, or user.
+
+Worker task implementations are not uploaded through the API. Deployments
+register task callables by editing the application-side hook:
+`app.tasks.registry.build_task_registry()`. The default hook returns an empty
+registry so local deployments must provide implementations for dispatched task
+IDs.
+
+## Docker Compose
+
+For a local multi-process cluster:
+
+```bash
+docker compose build
+docker compose up -d postgres redis
+docker compose run --rm migrate
+docker compose up -d api scheduler publisher reaper worker
+curl http://localhost:8000/health
+curl http://localhost:8000/ready
+```
+
+Compose defines:
+
+- `postgres`
+- `redis`
+- `migrate`
+- `api`
+- `scheduler`
+- `publisher`
+- `reaper`
+- `worker`
+
+All Fluxion application services reuse the same image with different commands.
+The `migrate` service runs `alembic upgrade head` once; the long-running
+services depend on its successful completion so every role does not race schema
+migrations. Local Compose defaults use development PostgreSQL credentials, but
+`JWT_SECRET` must be supplied through the environment and is not baked into the
+image.
 
 Control-plane endpoints live under `/api/v1`:
 
@@ -171,7 +225,8 @@ Fluxion does not automatically retry ambiguous work. Stale workers cannot
 commit after lease loss because terminal attempt updates require the current
 lease token and a still-running task row. Service loops support graceful
 shutdown, but there is no Kubernetes/process supervisor or exactly-once
-execution guarantee yet. The REST API uses bearer JWT authentication and RBAC
+execution guarantee yet. The Docker Compose file is for local development and
+smoke testing, not production orchestration. The REST API uses bearer JWT authentication and RBAC
 when `AUTH_ENABLED=true`. Roles are `viewer` for read-only workflow/run
 inspection, `operator` for workflow/run creation and safe control actions, and
 `admin` for operational endpoints under `/api/v1/ops`. Required JWT settings

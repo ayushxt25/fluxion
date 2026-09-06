@@ -11,6 +11,7 @@ from app.api.routes.operations import router as operations_router
 from app.api.routes.runs import router as runs_router
 from app.api.routes.workflows import router as workflows_router
 from app.core.config import get_settings
+from app.db.session import engine
 from app.dispatch.transport import RedisTaskDispatcher
 from app.observability.logging import configure_logging
 from app.security.rate_limit import RedisRateLimiter
@@ -34,6 +35,7 @@ def create_app() -> FastAPI:
         finally:
             await redis_dispatcher.aclose()
             await rate_limiter.aclose()
+            await engine.dispose()
 
     app = FastAPI(
         title=settings.app_name,

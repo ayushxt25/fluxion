@@ -26,6 +26,14 @@ dev = [
     "ruff>=0.6,<1",
 ]
 
+[project.scripts]
+fluxion = "app.cli:main"
+fluxion-api = "app.runtime.api:main"
+fluxion-scheduler = "app.runtime.scheduler:main"
+fluxion-publisher = "app.runtime.publisher:main"
+fluxion-reaper = "app.runtime.reaper:main"
+fluxion-worker = "app.runtime.worker:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
 
