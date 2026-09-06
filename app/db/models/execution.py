@@ -152,6 +152,8 @@ class DispatchOutboxRecord(Base):
     claim_token: Mapped[str | None] = mapped_column(String(255))
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    discarded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    discard_reason: Mapped[str | None] = mapped_column(Text)
     publish_attempts: Mapped[int] = mapped_column(
         Integer,
         nullable=False,

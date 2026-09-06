@@ -70,6 +70,16 @@ class DispatchOutboxEvent:
     claim_expires_at: datetime | None
     publish_attempts: int
     last_error: str | None
+    discarded_at: datetime | None = None
+    discard_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class WorkflowRunSummary:
+    run_id: str
+    workflow_id: str
+    status: WorkflowStatus
+    created_at: datetime
 
 
 class WorkflowRepository:
@@ -173,6 +183,64 @@ class WorkflowRepository:
                 await self._session.get(WorkflowDefinitionRecord, workflow_id)
                 is not None
             )
+
+    async def list(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[WorkflowDefinition, ...]:
+        async with self._session.begin():
+            result = await self._session.execute(
+                select(WorkflowDefinitionRecord)
+                .options(selectinload(WorkflowDefinitionRecord.tasks))
+                .order_by(WorkflowDefinitionRecord.id)
+                .limit(limit)
+                .offset(offset)
+            )
+            records = tuple(result.scalars())
+            workflow_ids = [record.id for record in records]
+            dependency_result = await self._session.execute(
+                select(TaskDependencyRecord).where(
+                    TaskDependencyRecord.workflow_id.in_(workflow_ids)
+                )
+            )
+            dependencies: dict[tuple[str, str], list[str]] = {
+                (record.id, task.task_id): []
+                for record in records
+                for task in record.tasks
+            }
+            for dependency in dependency_result.scalars():
+                dependencies[
+                    (dependency.workflow_id, dependency.task_id)
+                ].append(dependency.depends_on_task_id)
+
+        workflows = []
+        for record in records:
+            workflows.append(
+                WorkflowDefinition(
+                    id=record.id,
+                    name=record.name,
+                    tasks=tuple(
+                        TaskDefinition(
+                            id=task.task_id,
+                            name=task.name,
+                            depends_on=tuple(
+                                sorted(dependencies[(record.id, task.task_id)])
+                            ),
+                            retry_policy=RetryPolicy(
+                                max_attempts=task.retry_max_attempts,
+                                initial_backoff_seconds=(
+                                    task.retry_initial_backoff_seconds
+                                ),
+                                backoff_multiplier=task.retry_backoff_multiplier,
+                                max_backoff_seconds=task.retry_max_backoff_seconds,
+                            ),
+                        )
+                        for task in sorted(record.tasks, key=lambda item: item.task_id)
+                    ),
+                )
+            )
+        return tuple(workflows)
 
 
 class WorkflowRunRepository:
@@ -290,6 +358,50 @@ class WorkflowRunRepository:
                 raise WorkflowRunNotFoundError(run_id)
             return workflow_id
 
+    async def get_summary(self, run_id: str) -> WorkflowRunSummary:
+        async with self._session.begin():
+            record = await self._session.get(WorkflowRunRecord, run_id)
+            if record is None:
+                raise WorkflowRunNotFoundError(run_id)
+            return WorkflowRunSummary(
+                run_id=record.run_id,
+                workflow_id=record.workflow_id,
+                status=WorkflowStatus(record.status),
+                created_at=record.created_at,
+            )
+
+    async def list(
+        self,
+        *,
+        workflow_id: str | None = None,
+        status: WorkflowStatus | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[WorkflowRunSummary, ...]:
+        async with self._session.begin():
+            query = select(WorkflowRunRecord)
+            if workflow_id is not None:
+                query = query.where(WorkflowRunRecord.workflow_id == workflow_id)
+            if status is not None:
+                query = query.where(WorkflowRunRecord.status == status.value)
+            result = await self._session.execute(
+                query.order_by(
+                    WorkflowRunRecord.created_at.desc(),
+                    WorkflowRunRecord.run_id,
+                )
+                .limit(limit)
+                .offset(offset)
+            )
+            return tuple(
+                WorkflowRunSummary(
+                    run_id=record.run_id,
+                    workflow_id=record.workflow_id,
+                    status=WorkflowStatus(record.status),
+                    created_at=record.created_at,
+                )
+                for record in result.scalars()
+            )
+
     async def save_state(self, workflow_run: WorkflowRun) -> None:
         async with self._session.begin():
             result = await self._session.execute(
@@ -393,6 +505,8 @@ class DispatchOutboxRepository:
             claim_token=None,
             claimed_at=None,
             claim_expires_at=None,
+            discarded_at=None,
+            discard_reason=None,
             publish_attempts=0,
             last_error=None,
         )
@@ -405,6 +519,7 @@ class DispatchOutboxRepository:
             result = await self._session.execute(
                 select(DispatchOutboxRecord)
                 .where(DispatchOutboxRecord.published_at.is_(None))
+                .where(DispatchOutboxRecord.discarded_at.is_(None))
                 .order_by(DispatchOutboxRecord.created_at, DispatchOutboxRecord.id)
                 .limit(limit)
             )
@@ -422,6 +537,7 @@ class DispatchOutboxRepository:
             result = await self._session.execute(
                 select(DispatchOutboxRecord)
                 .where(DispatchOutboxRecord.published_at.is_(None))
+                .where(DispatchOutboxRecord.discarded_at.is_(None))
                 .where(
                     (DispatchOutboxRecord.claim_token.is_(None))
                     | (DispatchOutboxRecord.claim_expires_at < now)
@@ -469,6 +585,54 @@ class DispatchOutboxRepository:
             record.claim_expires_at = None
             record.publish_attempts += 1
             record.last_error = None
+
+    async def mark_discarded(
+        self,
+        event_id: str,
+        discarded_at: datetime,
+        reason: str,
+        *,
+        publisher_id: str | None = None,
+        claim_token: str | None = None,
+    ) -> None:
+        async with self._session.begin():
+            record = await self._session.get(DispatchOutboxRecord, event_id)
+            if record is None:
+                raise PersistenceError(f"Dispatch outbox event '{event_id}' not found.")
+            if (
+                (publisher_id is not None or claim_token is not None)
+                and (
+                    record.claimed_by != publisher_id
+                    or record.claim_token != claim_token
+                    or record.published_at is not None
+                )
+            ):
+                raise PersistenceError(
+                    f"Dispatch outbox event '{event_id}' claim was lost."
+                )
+            record.discarded_at = discarded_at
+            record.discard_reason = reason
+            record.claimed_by = None
+            record.claim_token = None
+            record.claimed_at = None
+            record.claim_expires_at = None
+
+    async def is_dispatch_still_valid(self, event: DispatchOutboxEvent) -> bool:
+        async with self._session.begin():
+            task_record = await self._session.get(
+                TaskRunRecord,
+                (event.run_id, event.task_id),
+            )
+            attempt_record = await self._session.get(
+                TaskAttemptRecord,
+                (event.run_id, event.task_id, event.attempt_number),
+            )
+            return (
+                task_record is not None
+                and attempt_record is not None
+                and task_record.status == TaskStatus.DISPATCHED.value
+                and attempt_record.status == AttemptStatus.DISPATCHED.value
+            )
 
     async def record_publish_failure(
         self,
@@ -561,6 +725,11 @@ class DispatchOutboxRepository:
                 record.id,
                 "published event still has claim metadata.",
             )
+        if record.discarded_at is not None and has_claim:
+            raise InvalidOutboxPayloadError(
+                record.id,
+                "discarded event still has claim metadata.",
+            )
         return DispatchOutboxEvent(
             id=record.id,
             event_type=record.event_type,
@@ -575,6 +744,8 @@ class DispatchOutboxRepository:
             claim_token=record.claim_token,
             claimed_at=record.claimed_at,
             claim_expires_at=record.claim_expires_at,
+            discarded_at=record.discarded_at,
+            discard_reason=record.discard_reason,
             publish_attempts=record.publish_attempts,
             last_error=record.last_error,
         )
@@ -792,6 +963,17 @@ class TaskAttemptRepository:
                     attempt.task_id,
                     "lease token does not authorize completion.",
                 )
+            task_record = await self._session.get(
+                TaskRunRecord,
+                (attempt.run_id, attempt.task_id),
+                with_for_update=True,
+            )
+            if task_record is None or task_record.status != TaskStatus.RUNNING.value:
+                raise LeaseLostError(
+                    attempt.run_id,
+                    attempt.task_id,
+                    "task is no longer RUNNING.",
+                )
             await self._save_workflow_state(workflow_run)
             record.status = status.value
             record.finished_at = finished_at
@@ -907,6 +1089,7 @@ class TaskAttemptRepository:
                     task_id=record.task_id,
                     attempt_number=record.attempt_number,
                     status=AttemptStatus(record.status),
+                    created_at=record.created_at,
                     started_at=record.started_at,
                     finished_at=record.finished_at,
                     error_type=record.error_type,
@@ -933,6 +1116,7 @@ class TaskAttemptRepository:
                     task_id=record.task_id,
                     attempt_number=record.attempt_number,
                     status=AttemptStatus(record.status),
+                    created_at=record.created_at,
                     started_at=record.started_at,
                     finished_at=record.finished_at,
                     error_type=record.error_type,

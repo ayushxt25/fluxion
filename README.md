@@ -18,7 +18,9 @@ can also receive an immutable execution context containing stable attempt and
 task idempotency identities. Redis dispatch now uses a PostgreSQL transactional
 outbox so dispatch intent is durable before transport publication. Long-running
 scheduler, outbox publisher, and lease reaper loops are available as explicit
-engine services.
+engine services. Fluxion also exposes a versioned REST control plane for
+workflow definitions, durable run inspection, cancellation, recovery,
+continuation checks, and selected operational one-shot actions.
 
 ## Planned Capabilities
 
@@ -72,6 +74,34 @@ Health check:
 curl http://127.0.0.1:8000/health
 ```
 
+Control-plane endpoints live under `/api/v1`:
+
+- `POST /api/v1/workflows`
+- `GET /api/v1/workflows`
+- `GET /api/v1/workflows/{workflow_id}`
+- `POST /api/v1/workflows/{workflow_id}/runs`
+- `GET /api/v1/runs`
+- `GET /api/v1/runs/{run_id}`
+- `GET /api/v1/runs/{run_id}/tasks`
+- `GET /api/v1/runs/{run_id}/tasks/{task_id}/attempts`
+- `POST /api/v1/runs/{run_id}/cancel`
+- `POST /api/v1/runs/{run_id}/recover`
+- `POST /api/v1/runs/{run_id}/resume`
+- `POST /api/v1/ops/scheduler/tick`
+- `POST /api/v1/ops/outbox/publish`
+- `POST /api/v1/ops/leases/reap`
+
+Example workflow definition:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/workflows \
+  -H "Content-Type: application/json" \
+  -d '{"id":"order-pipeline","name":"Order Pipeline","tasks":[{"id":"validate","depends_on":[]}]}'
+```
+
+The generated OpenAPI documentation is available from FastAPI at `/docs` and
+`/openapi.json`.
+
 ## Tests And Linting
 
 ```bash
@@ -105,9 +135,11 @@ publisher later claims outbox rows and sends versioned JSON messages to Redis.
 Outbox claim tokens and expiry reduce duplicate concurrent publication while
 remaining retryable after publisher crashes. Phase 11 adds worker lease
 ownership, heartbeat renewal, lease-token fencing, and explicit expired-lease
-reclaim. PostgreSQL remains the source of truth; Redis is only transport. Empty
-workflows are rejected because a workflow with zero executable tasks is not
-meaningful.
+reclaim. The REST API is a control plane only: it persists and inspects
+workflow state, but it does not upload task code or execute arbitrary task
+callables inside the API process. PostgreSQL remains the source of truth; Redis
+is only transport. Empty workflows are rejected because a workflow with zero
+executable tasks is not meaningful.
 
 The original direct executor remains single-process and local. Redis dispatch
 and worker services are currently a foundation, not a full distributed runtime.
@@ -125,9 +157,13 @@ match durable PostgreSQL state. Expired leases are treated conservatively: the
 attempt and task become `INTERRUPTED` and the workflow becomes `FAILED`;
 Fluxion does not automatically retry ambiguous work. Stale workers cannot
 commit after lease loss because terminal attempt updates require the current
-lease token. Service loops support graceful shutdown, but there is no
-Kubernetes/process supervisor, public API, or exactly-once execution guarantee
-yet.
+lease token and a still-running task row. Service loops support graceful
+shutdown, but there is no Kubernetes/process supervisor or exactly-once
+execution guarantee yet. The REST API currently has no authentication and is
+intended for local/internal use. Worker implementations must already be
+deployed and registered in worker processes. The API does not expose lease
+tokens, and unpublished outbox dispatches whose task is later cancelled are
+discarded instead of being published as stale Redis messages.
 
 For Phase 2, a failed task or individually cancelled task marks the workflow run
 as failed because successful completion is no longer possible. Explicit workflow

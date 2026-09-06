@@ -14,6 +14,7 @@ class OutboxPublishResult:
     failed: int
     published_event_ids: tuple[str, ...]
     failed_event_ids: tuple[str, ...]
+    discarded_event_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -49,8 +50,19 @@ class DispatchOutboxPublisher:
         )
         published_event_ids = []
         failed_event_ids = []
+        discarded_event_ids = []
 
         for event in events:
+            if not await self._outbox_repository.is_dispatch_still_valid(event):
+                await self._outbox_repository.mark_discarded(
+                    event.id,
+                    datetime.now(UTC),
+                    "dispatch target is no longer DISPATCHED.",
+                    publisher_id=self.publisher_id,
+                    claim_token=claim_token,
+                )
+                discarded_event_ids.append(event.id)
+                continue
             try:
                 await self._dispatcher.dispatch(event.message)
             except DispatchError as exc:
@@ -86,6 +98,7 @@ class DispatchOutboxPublisher:
             failed=len(failed_event_ids),
             published_event_ids=tuple(published_event_ids),
             failed_event_ids=tuple(failed_event_ids),
+            discarded_event_ids=tuple(discarded_event_ids),
         )
 
 

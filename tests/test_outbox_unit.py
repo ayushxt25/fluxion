@@ -42,6 +42,9 @@ class FakeOutboxRepository:
         self.published = []
         self.failures = []
 
+    async def is_dispatch_still_valid(self, event: DispatchOutboxEvent) -> bool:
+        return True
+
     async def list_unpublished(self, limit: int = 100):
         return tuple(event for event in self.events if event.published_at is None)
 

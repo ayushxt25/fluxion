@@ -45,6 +45,7 @@ class TaskAttempt:
     task_id: str
     attempt_number: int
     status: AttemptStatus
+    created_at: datetime | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
     error_type: str | None = None
