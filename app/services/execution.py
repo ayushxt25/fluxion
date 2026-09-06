@@ -1,5 +1,6 @@
 import asyncio
 import inspect
+import time
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -17,6 +18,12 @@ from app.engine.execution import TaskAttempt, WorkflowRun
 from app.engine.executor import WorkflowExecutionResult
 from app.engine.registry import TaskCallable, TaskRegistry
 from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
+from app.observability.metrics import (
+    record_task_attempt_failed,
+    record_task_attempt_started,
+    record_task_attempt_succeeded,
+    record_task_retry,
+)
 from app.schemas.workflow import WorkflowDefinition
 from app.services.repositories import (
     ExpiredTaskAttemptRef,
@@ -409,6 +416,7 @@ class _DurableWorkflowRunner:
         self._clock = clock or _SystemClock()
         self._sleeper = sleeper or _AsyncSleeper()
         self._errors: dict[str, str] = {}
+        self._attempt_durations: dict[tuple[str, str, int], float] = {}
 
     async def run(self) -> WorkflowExecutionResult:
         running: dict[
@@ -463,6 +471,7 @@ class _DurableWorkflowRunner:
                     self._run.run_id,
                     f"starting attempt for task '{task_id}'",
                 ) from exc
+            record_task_attempt_started()
             task = asyncio.create_task(self._execute_task(task_id, attempt))
             running[task] = (task_id, attempt)
 
@@ -493,6 +502,7 @@ class _DurableWorkflowRunner:
                     self._run.fail_task(task_id)
                 else:
                     self._run.schedule_retry(task_id, retry_at)
+                    record_task_retry()
                 error_type, _, error_message = error.partition(": ")
                 await self._finish_attempt(
                     task_id,
@@ -501,6 +511,11 @@ class _DurableWorkflowRunner:
                     error_type=error_type,
                     error_message=error_message,
                 )
+                duration = self._attempt_durations.pop(
+                    (attempt.run_id, attempt.task_id, attempt.attempt_number),
+                    0,
+                )
+                record_task_attempt_failed(duration)
 
         for task_id, attempt, task in completed:
             if task_id in failed_task_ids:
@@ -508,6 +523,11 @@ class _DurableWorkflowRunner:
             task.result()
             self._run.complete_task(task_id)
             await self._finish_attempt(task_id, attempt, AttemptStatus.SUCCEEDED)
+            duration = self._attempt_durations.pop(
+                (attempt.run_id, attempt.task_id, attempt.attempt_number),
+                0,
+            )
+            record_task_attempt_succeeded(duration)
 
     async def _finish_attempt(
         self,
@@ -538,10 +558,17 @@ class _DurableWorkflowRunner:
         task_id: str,
         attempt: TaskAttempt,
     ) -> tuple[str, str | None]:
+        attempt_timer = time.perf_counter()
         try:
             await self._call_task(task_id, attempt)
         except Exception as exc:  # noqa: BLE001
+            self._attempt_durations[
+                (attempt.run_id, attempt.task_id, attempt.attempt_number)
+            ] = time.perf_counter() - attempt_timer
             return task_id, f"{type(exc).__name__}: {exc}"
+        self._attempt_durations[
+            (attempt.run_id, attempt.task_id, attempt.attempt_number)
+        ] = time.perf_counter() - attempt_timer
         return task_id, None
 
     def _retry_time(self, task_id: str, attempt_number: int) -> datetime | None:

@@ -32,3 +32,22 @@ def test_service_loop_configuration_rejects_invalid_values() -> None:
     for values in invalid_values:
         with pytest.raises(ValidationError):
             Settings(**values)
+
+
+def test_observability_configuration_validation() -> None:
+    settings = Settings(
+        log_level="debug",
+        log_format="TEXT",
+        readiness_timeout_seconds=1,
+    )
+
+    assert settings.log_level == "DEBUG"
+    assert settings.log_format == "text"
+
+    for values in (
+        {"log_level": "TRACE"},
+        {"log_format": "xml"},
+        {"readiness_timeout_seconds": 0},
+    ):
+        with pytest.raises(ValidationError):
+            Settings(**values)

@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
 from app.dispatch.transport import RedisTaskDispatcher
+from app.observability.context import set_principal
 from app.security.auth import (
     AuthorizationError,
     RateLimitExceededError,
@@ -52,9 +53,13 @@ def get_rate_limiter(request: Request) -> RedisRateLimiter:
 
 
 def get_current_principal(
+    request: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> Principal:
-    return authenticate_bearer_token(authorization)
+    principal = authenticate_bearer_token(authorization)
+    request.state.principal = principal
+    set_principal(principal.subject, principal.role.value)
+    return principal
 
 
 def require_role(required_role: Role):

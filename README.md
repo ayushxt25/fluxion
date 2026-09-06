@@ -21,6 +21,8 @@ scheduler, outbox publisher, and lease reaper loops are available as explicit
 engine services. Fluxion also exposes a versioned REST control plane for
 workflow definitions, durable run inspection, cancellation, recovery,
 continuation checks, and selected operational one-shot actions.
+Phase 17 adds structured request and engine logging, Prometheus-compatible
+process metrics at `/metrics`, and a readiness probe at `/ready`.
 
 ## Planned Capabilities
 
@@ -73,6 +75,16 @@ Health check:
 ```bash
 curl http://127.0.0.1:8000/health
 ```
+
+Readiness checks PostgreSQL and Redis without exposing connection details:
+
+```bash
+curl http://127.0.0.1:8000/ready
+```
+
+Prometheus-compatible process metrics are exposed at `/metrics`. The endpoint
+uses low-cardinality labels such as HTTP method, route template, and status; it
+does not label metrics by run ID, workflow ID, task ID, request ID, or user.
 
 Control-plane endpoints live under `/api/v1`:
 
@@ -178,13 +190,23 @@ Audit events include request ID, principal subject/role, action, resource,
 outcome, and sanitized metadata; they do not store JWTs, secrets, or lease
 tokens. API responses include lightweight security headers, and oversized
 request bodies are rejected according to `MAX_REQUEST_BODY_BYTES`.
+Structured logs are configurable with `LOG_LEVEL` and `LOG_FORMAT=json|text`.
+Request completion logs include request ID, method, route template, status,
+duration, and authenticated principal when available. Logs and metrics
+intentionally exclude JWTs, authorization headers, lease tokens, database
+credentials, Redis credentials, and other secrets. `/health` is liveness only
+and does not check dependencies; `/ready` verifies PostgreSQL and Redis with
+`READINESS_TIMEOUT_SECONDS`. Metrics are in-process only; multiprocess
+Prometheus registry support is not implemented yet, and `/metrics` should be
+protected by network controls in production.
 
 There is no public login, user database, OAuth/OIDC provider, refresh token
-flow, per-workflow ACL, SIEM export, Prometheus/OpenTelemetry integration, or
-rate-limit fallback store yet. Worker implementations must already be deployed
-and registered in worker processes. The API does not expose lease tokens, and
-unpublished outbox dispatches whose task is later cancelled are discarded
-instead of being published as stale Redis messages.
+flow, per-workflow ACL, SIEM export, OpenTelemetry tracing, external log
+service, alerting system, or rate-limit fallback store yet. Worker
+implementations must already be deployed and registered in worker processes.
+The API does not expose lease tokens, and unpublished outbox dispatches whose
+task is later cancelled are discarded instead of being published as stale Redis
+messages.
 
 For Phase 2, a failed task or individually cancelled task marks the workflow run
 as failed because successful completion is no longer possible. Explicit workflow

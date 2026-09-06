@@ -1,5 +1,7 @@
 import asyncio
 import inspect
+import logging
+import time
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -17,12 +19,20 @@ from app.engine.exceptions import (
 from app.engine.execution import TaskAttempt, WorkflowRun
 from app.engine.registry import TaskCallable, TaskRegistry
 from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
+from app.observability.metrics import (
+    record_task_attempt_failed,
+    record_task_attempt_started,
+    record_task_attempt_succeeded,
+    record_task_retry,
+)
 from app.schemas.workflow import WorkflowDefinition
 from app.services.repositories import (
     TaskAttemptRepository,
     WorkflowRepository,
     WorkflowRunRepository,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -109,12 +119,37 @@ class TaskWorker:
             now,
             self._lease_seconds,
         )
+        record_task_attempt_started()
+        logger.info(
+            "Worker claimed task attempt.",
+            extra={
+                "event": "worker.claim",
+                "workflow_id": message.workflow_id,
+                "run_id": message.run_id,
+                "task_id": message.task_id,
+                "attempt_number": message.attempt_number,
+                "worker_id": self.worker_id,
+            },
+        )
 
         error: str | None = None
+        started = time.perf_counter()
         try:
             await self._call_task_with_heartbeat(message, running_attempt, workflow_run)
         except Exception as exc:  # noqa: BLE001
             if isinstance(exc, LeaseLostError):
+                record_task_attempt_failed(time.perf_counter() - started)
+                logger.warning(
+                    "Worker lost task lease.",
+                    extra={
+                        "event": "lease.lost",
+                        "workflow_id": message.workflow_id,
+                        "run_id": message.run_id,
+                        "task_id": message.task_id,
+                        "attempt_number": message.attempt_number,
+                        "worker_id": self.worker_id,
+                    },
+                )
                 raise
             error = f"{type(exc).__name__}: {exc}"
 
@@ -127,6 +162,18 @@ class TaskWorker:
                 datetime.now(UTC),
             )
             attempt_status = AttemptStatus.SUCCEEDED
+            record_task_attempt_succeeded(time.perf_counter() - started)
+            logger.info(
+                "Task attempt succeeded.",
+                extra={
+                    "event": "task.success",
+                    "workflow_id": message.workflow_id,
+                    "run_id": message.run_id,
+                    "task_id": message.task_id,
+                    "attempt_number": message.attempt_number,
+                    "worker_id": self.worker_id,
+                },
+            )
         else:
             retry_at = self._retry_time(
                 workflow,
@@ -138,6 +185,7 @@ class TaskWorker:
                 workflow_run.fail_task(message.task_id)
             else:
                 workflow_run.schedule_retry(message.task_id, retry_at)
+                record_task_retry()
             await self._attempt_repository.finish_leased_attempt(
                 workflow_run,
                 running_attempt,
@@ -147,6 +195,19 @@ class TaskWorker:
                 error_message=error_message,
             )
             attempt_status = AttemptStatus.FAILED
+            record_task_attempt_failed(time.perf_counter() - started)
+            logger.warning(
+                "Task attempt failed.",
+                extra={
+                    "event": "task.failure",
+                    "workflow_id": message.workflow_id,
+                    "run_id": message.run_id,
+                    "task_id": message.task_id,
+                    "attempt_number": message.attempt_number,
+                    "worker_id": self.worker_id,
+                    "retry_scheduled": retry_at is not None,
+                },
+            )
 
         return TaskWorkerResult(
             run_id=message.run_id,

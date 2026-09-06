@@ -1,8 +1,10 @@
+import logging
 from uuid import uuid4
 
 from app.engine.exceptions import UnknownTaskRunError, WorkflowRunNotResumableError
 from app.engine.execution import TaskAttempt, WorkflowRun
 from app.engine.status import WorkflowStatus
+from app.observability.metrics import record_workflow_run_created
 from app.schemas.api import (
     RecoveryResponse,
     TaskAttemptResponse,
@@ -17,6 +19,8 @@ from app.services.repositories import (
     WorkflowRepository,
     WorkflowRunRepository,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class WorkflowManagementService:
@@ -53,6 +57,7 @@ class WorkflowRunManagementService:
         workflow = await self._workflow_repository.get(workflow_id)
         workflow_run = WorkflowRun.create(run_id or str(uuid4()), workflow)
         await self._run_repository.create(workflow_run)
+        record_workflow_run_created()
         return await self.get_run(workflow_run.run_id)
 
     async def get_run(self, run_id: str) -> WorkflowRunResponse:
@@ -116,6 +121,14 @@ class WorkflowRunManagementService:
             )
         workflow_run.cancel_workflow()
         await self._run_repository.save_state(workflow_run)
+        logger.info(
+            "Workflow run cancelled.",
+            extra={
+                "event": "workflow.cancel",
+                "workflow_id": workflow_id,
+                "run_id": run_id,
+            },
+        )
         return await self.get_run(run_id)
 
     async def recover_run(self, run_id: str) -> RecoveryResponse:

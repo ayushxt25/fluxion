@@ -29,6 +29,8 @@ from app.db.base import Base
 from app.dispatch.transport import InMemoryTaskDispatcher
 from app.engine.execution import WorkflowRun
 from app.main import create_app
+from app.observability.context import get_log_context
+from app.observability.metrics import reset_metrics_for_tests
 from app.schemas.workflow import TaskDefinition, WorkflowDefinition
 from app.security.auth import create_access_token
 from app.security.models import Role
@@ -63,6 +65,16 @@ class FakeRateLimiter:
         return RateLimitDecision(limit=limit, remaining=remaining, retry_after=60)
 
 
+class FailingDispatcher(InMemoryTaskDispatcher):
+    async def ping(self) -> None:
+        raise RuntimeError("redis password=secret unreachable")
+
+
+class FailingSession:
+    async def execute(self, statement):
+        raise RuntimeError("postgresql://user:password@localhost/db")
+
+
 async def reset_schema(engine) -> None:
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
@@ -74,6 +86,8 @@ async def api_client(
     *,
     auth_enabled: bool = True,
     rate_limiter: FakeRateLimiter | None = None,
+    dispatcher: InMemoryTaskDispatcher | None = None,
+    postgres_ready: bool = True,
 ) -> AsyncIterator[tuple[AsyncClient, async_sessionmaker]]:
     env_keys = (
         "AUTH_ENABLED",
@@ -83,6 +97,9 @@ async def api_client(
         "RATE_LIMIT_ADMIN_PER_MINUTE",
         "RATE_LIMIT_OPS_PER_MINUTE",
         "MAX_REQUEST_BODY_BYTES",
+        "LOG_LEVEL",
+        "LOG_FORMAT",
+        "READINESS_TIMEOUT_SECONDS",
     )
     previous_env = {key: os.environ.get(key) for key in env_keys}
     os.environ["AUTH_ENABLED"] = "true" if auth_enabled else "false"
@@ -92,17 +109,21 @@ async def api_client(
     os.environ.setdefault("RATE_LIMIT_ADMIN_PER_MINUTE", "60")
     os.environ.setdefault("RATE_LIMIT_OPS_PER_MINUTE", "20")
     get_settings.cache_clear()
+    reset_metrics_for_tests()
     engine = create_async_engine(TEST_DATABASE_URL)
     await reset_schema(engine)
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     app = create_app()
 
     async def override_session():
+        if not postgres_ready:
+            yield FailingSession()
+            return
         async with session_factory() as session:
             yield session
 
     app.dependency_overrides[get_db_session] = override_session
-    app.state.redis_dispatcher = InMemoryTaskDispatcher()
+    app.state.redis_dispatcher = dispatcher or InMemoryTaskDispatcher()
     app.state.rate_limiter = rate_limiter or FakeRateLimiter()
     try:
         transport = ASGITransport(app=app)
@@ -120,6 +141,7 @@ async def api_client(
             else:
                 os.environ[key] = value
         get_settings.cache_clear()
+        reset_metrics_for_tests()
 
 
 def auth_headers(role: Role = Role.ADMIN) -> dict[str, str]:
@@ -495,4 +517,96 @@ async def test_security_headers_and_oversized_body() -> None:
             os.environ.pop("MAX_REQUEST_BODY_BYTES", None)
         else:
             os.environ["MAX_REQUEST_BODY_BYTES"] = previous_limit
+        get_settings.cache_clear()
+
+
+async def test_readiness_and_metrics_endpoints() -> None:
+    async with api_client() as (client, _):
+        health = await client.get("/health")
+        ready = await client.get("/ready")
+        missing_run = await client.get(
+            "/api/v1/runs/run-observe-123",
+            headers=auth_headers(Role.VIEWER),
+        )
+        metrics = await client.get("/metrics")
+
+        assert health.status_code == 200
+        assert health.json() == {"status": "ok", "service": "fluxion"}
+        assert ready.status_code == 200
+        assert ready.json() == {
+            "status": "ready",
+            "checks": {"postgres": "ok", "redis": "ok"},
+        }
+        assert missing_run.status_code == 404
+        assert metrics.status_code == 200
+        assert "text/plain" in metrics.headers["content-type"]
+        body = metrics.text
+        assert "fluxion_http_requests_total" in body
+        assert "fluxion_http_request_duration_seconds" in body
+        assert 'path="/api/v1/runs/{run_id}"' in body
+        assert "run-observe-123" not in body
+        assert get_log_context().request_id is None
+
+
+async def test_redis_readiness_failure_does_not_leak_connection_details() -> None:
+    async with api_client(dispatcher=FailingDispatcher()) as (client, _):
+        response = await client.get("/ready")
+
+        assert response.status_code == 503
+        assert response.json() == {
+            "status": "not_ready",
+            "checks": {"postgres": "ok", "redis": "failed"},
+        }
+        assert "secret" not in response.text
+
+
+async def test_postgres_readiness_failure_does_not_leak_connection_details() -> None:
+    async with api_client(postgres_ready=False) as (client, _):
+        response = await client.get("/ready")
+
+        assert response.status_code == 503
+        assert response.json() == {
+            "status": "not_ready",
+            "checks": {"postgres": "failed", "redis": "ok"},
+        }
+        assert "password" not in response.text
+
+
+async def test_metrics_cover_security_and_run_creation() -> None:
+    previous_limit = os.environ.get("RATE_LIMIT_VIEWER_PER_MINUTE")
+    os.environ["RATE_LIMIT_VIEWER_PER_MINUTE"] = "1"
+    get_settings.cache_clear()
+    try:
+        async with api_client() as (client, _):
+            unauthorized = await client.get("/api/v1/workflows")
+            await client.get("/api/v1/workflows", headers=auth_headers(Role.VIEWER))
+            limited = await client.get(
+                "/api/v1/workflows",
+                headers=auth_headers(Role.VIEWER),
+            )
+            workflow = await client.post(
+                "/api/v1/workflows",
+                json=workflow_payload("wf-metrics"),
+                headers=auth_headers(Role.OPERATOR),
+            )
+            run = await client.post(
+                "/api/v1/workflows/wf-metrics/runs",
+                json={"run_id": "run-metrics"},
+                headers=auth_headers(Role.OPERATOR),
+            )
+            metrics = await client.get("/metrics")
+
+            assert unauthorized.status_code == 401
+            assert limited.status_code == 429
+            assert workflow.status_code == 201
+            assert run.status_code == 201
+            body = metrics.text
+            assert "fluxion_auth_denied_total 1" in body
+            assert "fluxion_rate_limit_denied_total 1" in body
+            assert "fluxion_workflow_runs_created_total 1" in body
+    finally:
+        if previous_limit is None:
+            os.environ.pop("RATE_LIMIT_VIEWER_PER_MINUTE", None)
+        else:
+            os.environ["RATE_LIMIT_VIEWER_PER_MINUTE"] = previous_limit
         get_settings.cache_clear()

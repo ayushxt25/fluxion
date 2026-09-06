@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -6,12 +7,15 @@ from app.dispatch.transport import TaskDispatcher
 from app.engine.exceptions import InvalidConcurrencyLimitError
 from app.engine.execution import WorkflowRun
 from app.engine.status import TaskStatus
+from app.observability.metrics import record_task_dispatches
 from app.services.repositories import (
     DispatchOutboxRepository,
     TaskAttemptRepository,
     WorkflowRepository,
     WorkflowRunRepository,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -82,9 +86,20 @@ class WorkflowScheduler:
                 attempt_number,
                 message,
             )
+            logger.info(
+                "Task dispatch intent created.",
+                extra={
+                    "event": "task.dispatch",
+                    "workflow_id": workflow_id,
+                    "run_id": run_id,
+                    "task_id": task_id,
+                    "attempt_number": attempt_number,
+                },
+            )
             messages.append(message)
             outbox_event_ids.append(event.id)
 
+        record_task_dispatches(len(messages))
         return DispatchSummary(
             run_id=run_id,
             workflow_id=workflow_id,

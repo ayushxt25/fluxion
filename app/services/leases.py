@@ -1,12 +1,16 @@
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
+from app.observability.metrics import record_lease_reclaims
 from app.services.repositories import (
     TaskAttemptRepository,
     WorkflowRepository,
     WorkflowRunRepository,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -58,4 +62,16 @@ class LeaseReaper:
                         reclaimed=True,
                     )
                 )
+                logger.warning(
+                    "Expired worker lease reclaimed.",
+                    extra={
+                        "event": "lease.reclaim",
+                        "workflow_id": attempt_ref.workflow_id,
+                        "run_id": attempt_ref.run_id,
+                        "task_id": attempt_ref.task_id,
+                        "attempt_number": attempt_ref.attempt_number,
+                        "worker_id": attempt_ref.worker_id,
+                    },
+                )
+        record_lease_reclaims(len(results))
         return tuple(results)

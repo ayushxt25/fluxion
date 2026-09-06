@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     rate_limit_admin_per_minute: int = 60
     rate_limit_ops_per_minute: int = 20
     max_request_body_bytes: int = 1048576
+    log_level: str = "INFO"
+    log_format: str = "json"
+    readiness_timeout_seconds: float = 2
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -72,6 +75,20 @@ class Settings(BaseSettings):
             raise ValueError("RATE_LIMIT_OPS_PER_MINUTE must be positive.")
         if self.max_request_body_bytes <= 0:
             raise ValueError("MAX_REQUEST_BODY_BYTES must be positive.")
+        if self.log_level.upper() not in {
+            "DEBUG",
+            "INFO",
+            "WARNING",
+            "ERROR",
+            "CRITICAL",
+        }:
+            raise ValueError("LOG_LEVEL must be a valid logging level.")
+        self.log_level = self.log_level.upper()
+        self.log_format = self.log_format.lower()
+        if self.log_format not in {"json", "text"}:
+            raise ValueError("LOG_FORMAT must be either json or text.")
+        if self.readiness_timeout_seconds <= 0:
+            raise ValueError("READINESS_TIMEOUT_SECONDS must be positive.")
         return self
 
 

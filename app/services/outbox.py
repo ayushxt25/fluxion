@@ -1,10 +1,15 @@
+import logging
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.dispatch.transport import TaskDispatcher
 from app.engine.exceptions import DispatchError
+from app.observability.metrics import record_outbox_publish
 from app.services.repositories import DispatchOutboxRepository
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -53,6 +58,7 @@ class DispatchOutboxPublisher:
         discarded_event_ids = []
 
         for event in events:
+            started = time.perf_counter()
             if not await self._outbox_repository.is_dispatch_still_valid(event):
                 await self._outbox_repository.mark_discarded(
                     event.id,
@@ -62,6 +68,10 @@ class DispatchOutboxPublisher:
                     claim_token=claim_token,
                 )
                 discarded_event_ids.append(event.id)
+                record_outbox_publish(
+                    outcome="discarded",
+                    duration_seconds=time.perf_counter() - started,
+                )
                 continue
             try:
                 await self._dispatcher.dispatch(event.message)
@@ -73,6 +83,21 @@ class DispatchOutboxPublisher:
                     claim_token=claim_token,
                 )
                 failed_event_ids.append(event.id)
+                record_outbox_publish(
+                    outcome="failed",
+                    duration_seconds=time.perf_counter() - started,
+                )
+                logger.warning(
+                    "Outbox publish failed.",
+                    extra={
+                        "event": "outbox.publish",
+                        "outcome": "failed",
+                        "workflow_id": event.workflow_id,
+                        "run_id": event.run_id,
+                        "task_id": event.task_id,
+                        "attempt_number": event.attempt_number,
+                    },
+                )
                 continue
             except Exception as exc:
                 await self._outbox_repository.record_publish_failure(
@@ -82,6 +107,21 @@ class DispatchOutboxPublisher:
                     claim_token=claim_token,
                 )
                 failed_event_ids.append(event.id)
+                record_outbox_publish(
+                    outcome="failed",
+                    duration_seconds=time.perf_counter() - started,
+                )
+                logger.warning(
+                    "Outbox publish failed.",
+                    extra={
+                        "event": "outbox.publish",
+                        "outcome": "failed",
+                        "workflow_id": event.workflow_id,
+                        "run_id": event.run_id,
+                        "task_id": event.task_id,
+                        "attempt_number": event.attempt_number,
+                    },
+                )
                 continue
 
             await self._outbox_repository.mark_published(
@@ -91,6 +131,21 @@ class DispatchOutboxPublisher:
                 claim_token=claim_token,
             )
             published_event_ids.append(event.id)
+            record_outbox_publish(
+                outcome="success",
+                duration_seconds=time.perf_counter() - started,
+            )
+            logger.info(
+                "Outbox event published.",
+                extra={
+                    "event": "outbox.publish",
+                    "outcome": "success",
+                    "workflow_id": event.workflow_id,
+                    "run_id": event.run_id,
+                    "task_id": event.task_id,
+                    "attempt_number": event.attempt_number,
+                },
+            )
 
         return OutboxPublishResult(
             attempted=len(events),

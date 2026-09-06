@@ -11,6 +11,8 @@ class TaskDispatcher(Protocol):
     async def receive(self, timeout: float | None = None) -> TaskDispatchMessage | None:
         ...
 
+    async def ping(self) -> None: ...
+
 
 class InMemoryTaskDispatcher:
     def __init__(self) -> None:
@@ -28,6 +30,9 @@ class InMemoryTaskDispatcher:
         except TimeoutError:
             return None
         return TaskDispatchMessage.from_json(payload)
+
+    async def ping(self) -> None:
+        return None
 
 
 class RedisTaskDispatcher:
@@ -60,6 +65,13 @@ class RedisTaskDispatcher:
             return None
         _, payload = item
         return TaskDispatchMessage.from_json(payload)
+
+    async def ping(self) -> None:
+        try:
+            client = await self._get_client()
+            await client.ping()
+        except Exception as exc:
+            raise DispatchError("Redis readiness check failed.") from exc
 
     async def aclose(self) -> None:
         if self._client is not None:
