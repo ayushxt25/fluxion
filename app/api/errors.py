@@ -21,6 +21,7 @@ from app.engine.exceptions import (
     WorkflowRunNotResumableError,
     WorkflowValidationError,
 )
+from app.security.auth import AuthenticationError, AuthorizationError
 
 
 def install_api_handlers(app: FastAPI) -> None:
@@ -38,6 +39,8 @@ def install_api_handlers(app: FastAPI) -> None:
     app.add_exception_handler(DispatchError, unavailable_handler)
     app.add_exception_handler(WorkerLeaseError, unavailable_handler)
     app.add_exception_handler(PersistenceError, unavailable_handler)
+    app.add_exception_handler(AuthenticationError, authentication_handler)
+    app.add_exception_handler(AuthorizationError, authorization_handler)
 
 
 async def request_id_middleware(
@@ -64,6 +67,16 @@ async def validation_handler(request: Request, exc: Exception) -> JSONResponse:
 
 async def unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
     return _error_response(HTTPStatus.SERVICE_UNAVAILABLE, exc)
+
+
+async def authentication_handler(request: Request, exc: Exception) -> JSONResponse:
+    response = _error_response(HTTPStatus.UNAUTHORIZED, exc)
+    response.headers["WWW-Authenticate"] = "Bearer"
+    return response
+
+
+async def authorization_handler(request: Request, exc: Exception) -> JSONResponse:
+    return _error_response(HTTPStatus.FORBIDDEN, exc)
 
 
 def _error_response(status: HTTPStatus, exc: Exception) -> JSONResponse:

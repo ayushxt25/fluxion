@@ -159,11 +159,20 @@ Fluxion does not automatically retry ambiguous work. Stale workers cannot
 commit after lease loss because terminal attempt updates require the current
 lease token and a still-running task row. Service loops support graceful
 shutdown, but there is no Kubernetes/process supervisor or exactly-once
-execution guarantee yet. The REST API currently has no authentication and is
-intended for local/internal use. Worker implementations must already be
-deployed and registered in worker processes. The API does not expose lease
-tokens, and unpublished outbox dispatches whose task is later cancelled are
-discarded instead of being published as stale Redis messages.
+execution guarantee yet. The REST API uses bearer JWT authentication and RBAC
+when `AUTH_ENABLED=true`. Roles are `viewer` for read-only workflow/run
+inspection, `operator` for workflow/run creation and safe control actions, and
+`admin` for operational endpoints under `/api/v1/ops`. Required JWT settings
+include `JWT_SECRET`, `JWT_ALGORITHM=HS256`, `JWT_ISSUER`, `JWT_AUDIENCE`, and
+`JWT_ACCESS_TOKEN_MINUTES`. Development tests can mint tokens with
+`app.security.auth.create_access_token(subject, role)`. Setting
+`AUTH_ENABLED=false` treats requests as an internal admin principal and is only
+appropriate for local development, never exposed deployments. There is no
+public login, user database, OAuth/OIDC provider, refresh token flow, or
+per-workflow ACL yet. Worker implementations must already be deployed and
+registered in worker processes. The API does not expose lease tokens, and
+unpublished outbox dispatches whose task is later cancelled are discarded
+instead of being published as stale Redis messages.
 
 For Phase 2, a failed task or individually cancelled task marks the workflow run
 as failed because successful completion is no longer possible. Explicit workflow

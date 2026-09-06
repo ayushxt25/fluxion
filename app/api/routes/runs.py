@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_db_session
+from app.api.dependencies import get_db_session, require_role
 from app.api.pagination import LimitQuery, OffsetQuery
 from app.engine.exceptions import UnknownTaskRunError
 from app.engine.status import WorkflowStatus
@@ -14,6 +14,7 @@ from app.schemas.api import (
     WorkflowRunListResponse,
     WorkflowRunResponse,
 )
+from app.security.models import Role
 from app.services.management import WorkflowRunManagementService
 from app.services.repositories import (
     TaskAttemptRepository,
@@ -32,7 +33,12 @@ def _run_service(session: AsyncSession) -> WorkflowRunManagementService:
     )
 
 
-@router.get("", response_model=WorkflowRunListResponse, summary="List workflow runs")
+@router.get(
+    "",
+    response_model=WorkflowRunListResponse,
+    summary="List workflow runs",
+    dependencies=[Depends(require_role(Role.VIEWER))],
+)
 async def list_runs(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     workflow_id: str | None = None,
@@ -54,7 +60,12 @@ async def list_runs(
     )
 
 
-@router.get("/{run_id}", response_model=WorkflowRunResponse, summary="Get run")
+@router.get(
+    "/{run_id}",
+    response_model=WorkflowRunResponse,
+    summary="Get run",
+    dependencies=[Depends(require_role(Role.VIEWER))],
+)
 async def get_run(
     run_id: str,
     session: Annotated[AsyncSession, Depends(get_db_session)],
@@ -66,6 +77,7 @@ async def get_run(
     "/{run_id}/tasks",
     response_model=tuple[TaskRunResponse, ...],
     summary="List task runs",
+    dependencies=[Depends(require_role(Role.VIEWER))],
 )
 async def list_tasks(
     run_id: str,
@@ -78,6 +90,7 @@ async def list_tasks(
     "/{run_id}/tasks/{task_id}",
     response_model=TaskRunResponse,
     summary="Get task run",
+    dependencies=[Depends(require_role(Role.VIEWER))],
 )
 async def get_task(
     run_id: str,
@@ -95,6 +108,7 @@ async def get_task(
     "/{run_id}/tasks/{task_id}/attempts",
     response_model=TaskAttemptListResponse,
     summary="List task attempts",
+    dependencies=[Depends(require_role(Role.VIEWER))],
 )
 async def list_attempts(
     run_id: str,
@@ -109,6 +123,7 @@ async def list_attempts(
     "/{run_id}/cancel",
     response_model=WorkflowRunResponse,
     summary="Cancel workflow run",
+    dependencies=[Depends(require_role(Role.OPERATOR))],
 )
 async def cancel_run(
     run_id: str,
@@ -121,6 +136,7 @@ async def cancel_run(
     "/{run_id}/recover",
     response_model=RecoveryResponse,
     summary="Recover workflow run state",
+    dependencies=[Depends(require_role(Role.OPERATOR))],
 )
 async def recover_run(
     run_id: str,
@@ -133,6 +149,7 @@ async def recover_run(
     "/{run_id}/resume",
     response_model=WorkflowRunResponse,
     summary="Validate run continuation",
+    dependencies=[Depends(require_role(Role.OPERATOR))],
 )
 async def continue_run(
     run_id: str,

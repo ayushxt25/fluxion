@@ -3,13 +3,14 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_db_session, get_redis_dispatcher
+from app.api.dependencies import get_db_session, get_redis_dispatcher, require_role
 from app.dispatch.transport import RedisTaskDispatcher
 from app.schemas.api import (
     LeaseReapResponse,
     OutboxPublishResponse,
     SchedulerTickResponse,
 )
+from app.security.models import Role
 from app.services.leases import LeaseReaper
 from app.services.loops import LeaseReaperLoop, SchedulerLoop
 from app.services.outbox import DispatchOutboxPublisher
@@ -28,6 +29,7 @@ router = APIRouter(prefix="/ops", tags=["operations"])
     "/scheduler/tick",
     response_model=SchedulerTickResponse,
     summary="Run one scheduler tick",
+    dependencies=[Depends(require_role(Role.ADMIN))],
 )
 async def scheduler_tick(
     session: Annotated[AsyncSession, Depends(get_db_session)],
@@ -54,6 +56,7 @@ async def scheduler_tick(
     "/outbox/publish",
     response_model=OutboxPublishResponse,
     summary="Publish pending outbox dispatches",
+    dependencies=[Depends(require_role(Role.ADMIN))],
 )
 async def outbox_publish(
     session: Annotated[AsyncSession, Depends(get_db_session)],
@@ -78,6 +81,7 @@ async def outbox_publish(
     "/leases/reap",
     response_model=LeaseReapResponse,
     summary="Reclaim expired worker leases",
+    dependencies=[Depends(require_role(Role.ADMIN))],
 )
 async def leases_reap(
     session: Annotated[AsyncSession, Depends(get_db_session)],

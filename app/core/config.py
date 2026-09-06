@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     outbox_batch_size: int = 100
     outbox_claim_seconds: float = 30
     lease_reaper_interval_seconds: float = 5
+    auth_enabled: bool = True
+    jwt_secret: str | None = None
+    jwt_algorithm: str = "HS256"
+    jwt_issuer: str = "fluxion"
+    jwt_audience: str = "fluxion-api"
+    jwt_access_token_minutes: int = 60
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -46,6 +52,10 @@ class Settings(BaseSettings):
             raise ValueError("OUTBOX_CLAIM_SECONDS must be positive.")
         if self.lease_reaper_interval_seconds <= 0:
             raise ValueError("LEASE_REAPER_INTERVAL_SECONDS must be positive.")
+        if self.jwt_algorithm != "HS256":
+            raise ValueError("JWT_ALGORITHM must be HS256.")
+        if self.jwt_access_token_minutes <= 0:
+            raise ValueError("JWT_ACCESS_TOKEN_MINUTES must be positive.")
         return self
 
 

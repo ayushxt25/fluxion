@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_db_session
+from app.api.dependencies import get_db_session, require_role
 from app.api.pagination import LimitQuery, OffsetQuery
 from app.schemas.api import (
     CreateWorkflowRunRequest,
@@ -11,6 +11,7 @@ from app.schemas.api import (
     WorkflowRunResponse,
 )
 from app.schemas.workflow import WorkflowDefinition
+from app.security.models import Role
 from app.services.management import (
     WorkflowManagementService,
     WorkflowRunManagementService,
@@ -41,6 +42,7 @@ def _run_service(session: AsyncSession) -> WorkflowRunManagementService:
     response_model=WorkflowDefinition,
     status_code=status.HTTP_201_CREATED,
     summary="Create workflow definition",
+    dependencies=[Depends(require_role(Role.OPERATOR))],
 )
 async def create_workflow(
     workflow: WorkflowDefinition,
@@ -49,7 +51,12 @@ async def create_workflow(
     return await _workflow_service(session).create(workflow)
 
 
-@router.get("", response_model=WorkflowListResponse, summary="List workflows")
+@router.get(
+    "",
+    response_model=WorkflowListResponse,
+    summary="List workflows",
+    dependencies=[Depends(require_role(Role.VIEWER))],
+)
 async def list_workflows(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     limit: LimitQuery = 50,
@@ -68,6 +75,7 @@ async def list_workflows(
     "/{workflow_id}",
     response_model=WorkflowDefinition,
     summary="Get workflow definition",
+    dependencies=[Depends(require_role(Role.VIEWER))],
 )
 async def get_workflow(
     workflow_id: str,
@@ -81,6 +89,7 @@ async def get_workflow(
     response_model=WorkflowRunResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create durable workflow run",
+    dependencies=[Depends(require_role(Role.OPERATOR))],
 )
 async def create_run(
     workflow_id: str,
