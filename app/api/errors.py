@@ -21,7 +21,12 @@ from app.engine.exceptions import (
     WorkflowRunNotResumableError,
     WorkflowValidationError,
 )
-from app.security.auth import AuthenticationError, AuthorizationError
+from app.security.auth import (
+    AuthenticationError,
+    AuthorizationError,
+    RateLimitExceededError,
+    RateLimitUnavailableError,
+)
 
 
 def install_api_handlers(app: FastAPI) -> None:
@@ -41,6 +46,8 @@ def install_api_handlers(app: FastAPI) -> None:
     app.add_exception_handler(PersistenceError, unavailable_handler)
     app.add_exception_handler(AuthenticationError, authentication_handler)
     app.add_exception_handler(AuthorizationError, authorization_handler)
+    app.add_exception_handler(RateLimitExceededError, rate_limit_handler)
+    app.add_exception_handler(RateLimitUnavailableError, unavailable_handler)
 
 
 async def request_id_middleware(
@@ -48,6 +55,7 @@ async def request_id_middleware(
     call_next: Callable[[Request], Awaitable[Response]],
 ) -> Response:
     request_id = request.headers.get("X-Request-ID") or str(uuid4())
+    request.state.request_id = request_id
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
     return response
@@ -77,6 +85,17 @@ async def authentication_handler(request: Request, exc: Exception) -> JSONRespon
 
 async def authorization_handler(request: Request, exc: Exception) -> JSONResponse:
     return _error_response(HTTPStatus.FORBIDDEN, exc)
+
+
+async def rate_limit_handler(
+    request: Request,
+    exc: RateLimitExceededError,
+) -> JSONResponse:
+    response = _error_response(HTTPStatus.TOO_MANY_REQUESTS, exc)
+    response.headers["Retry-After"] = str(exc.retry_after)
+    response.headers["X-RateLimit-Limit"] = str(exc.limit)
+    response.headers["X-RateLimit-Remaining"] = str(exc.remaining)
+    return response
 
 
 def _error_response(status: HTTPStatus, exc: Exception) -> JSONResponse:

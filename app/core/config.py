@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     jwt_issuer: str = "fluxion"
     jwt_audience: str = "fluxion-api"
     jwt_access_token_minutes: int = 60
+    rate_limit_enabled: bool = True
+    rate_limit_viewer_per_minute: int = 120
+    rate_limit_operator_per_minute: int = 90
+    rate_limit_admin_per_minute: int = 60
+    rate_limit_ops_per_minute: int = 20
+    max_request_body_bytes: int = 1048576
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -56,6 +62,16 @@ class Settings(BaseSettings):
             raise ValueError("JWT_ALGORITHM must be HS256.")
         if self.jwt_access_token_minutes <= 0:
             raise ValueError("JWT_ACCESS_TOKEN_MINUTES must be positive.")
+        if self.rate_limit_viewer_per_minute <= 0:
+            raise ValueError("RATE_LIMIT_VIEWER_PER_MINUTE must be positive.")
+        if self.rate_limit_operator_per_minute <= 0:
+            raise ValueError("RATE_LIMIT_OPERATOR_PER_MINUTE must be positive.")
+        if self.rate_limit_admin_per_minute <= 0:
+            raise ValueError("RATE_LIMIT_ADMIN_PER_MINUTE must be positive.")
+        if self.rate_limit_ops_per_minute <= 0:
+            raise ValueError("RATE_LIMIT_OPS_PER_MINUTE must be positive.")
+        if self.max_request_body_bytes <= 0:
+            raise ValueError("MAX_REQUEST_BODY_BYTES must be positive.")
         return self
 
 

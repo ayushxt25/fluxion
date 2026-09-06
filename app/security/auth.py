@@ -17,6 +17,19 @@ class AuthorizationError(Exception):
     """Raised when an authenticated principal lacks permission."""
 
 
+class RateLimitExceededError(Exception):
+    def __init__(self, retry_after: int, limit: int, remaining: int) -> None:
+        self.retry_after = retry_after
+        self.limit = limit
+        self.remaining = remaining
+        super().__init__("Rate limit exceeded.")
+
+
+class RateLimitUnavailableError(Exception):
+    def __init__(self) -> None:
+        super().__init__("Rate limiting is temporarily unavailable.")
+
+
 def create_access_token(
     subject: str,
     role: Role | str,

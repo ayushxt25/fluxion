@@ -167,10 +167,22 @@ include `JWT_SECRET`, `JWT_ALGORITHM=HS256`, `JWT_ISSUER`, `JWT_AUDIENCE`, and
 `JWT_ACCESS_TOKEN_MINUTES`. Development tests can mint tokens with
 `app.security.auth.create_access_token(subject, role)`. Setting
 `AUTH_ENABLED=false` treats requests as an internal admin principal and is only
-appropriate for local development, never exposed deployments. There is no
-public login, user database, OAuth/OIDC provider, refresh token flow, or
-per-workflow ACL yet. Worker implementations must already be deployed and
-registered in worker processes. The API does not expose lease tokens, and
+appropriate for local development, never exposed deployments. Authenticated API
+traffic is rate-limited through Redis by principal subject, with default
+per-minute limits of 120 for viewers, 90 for operators, 60 for admins, and 20
+for operational endpoints. Rate-limit denials return `429` with `Retry-After`;
+Redis rate-limit failures return `503` rather than silently disabling
+protection. Security-sensitive actions and denials are written to a durable
+`audit_events` table and can be inspected by admins at `/api/v1/ops/audit`.
+Audit events include request ID, principal subject/role, action, resource,
+outcome, and sanitized metadata; they do not store JWTs, secrets, or lease
+tokens. API responses include lightweight security headers, and oversized
+request bodies are rejected according to `MAX_REQUEST_BODY_BYTES`.
+
+There is no public login, user database, OAuth/OIDC provider, refresh token
+flow, per-workflow ACL, SIEM export, Prometheus/OpenTelemetry integration, or
+rate-limit fallback store yet. Worker implementations must already be deployed
+and registered in worker processes. The API does not expose lease tokens, and
 unpublished outbox dispatches whose task is later cancelled are discarded
 instead of being published as stale Redis messages.
 

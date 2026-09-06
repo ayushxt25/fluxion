@@ -32,6 +32,7 @@ from app.main import create_app
 from app.schemas.workflow import TaskDefinition, WorkflowDefinition
 from app.security.auth import create_access_token
 from app.security.models import Role
+from app.security.rate_limit import RateLimitDecision
 from app.services.outbox import DispatchOutboxPublisher
 from app.services.repositories import (
     DispatchOutboxRepository,
@@ -44,6 +45,24 @@ from app.services.scheduler import WorkflowScheduler
 pytestmark = pytest.mark.asyncio
 
 
+class FakeRateLimiter:
+    def __init__(self, fail: bool = False) -> None:
+        self.fail = fail
+        self.counts: dict[tuple[str, str], int] = {}
+
+    async def check(self, principal, *, scope: str, limit: int, now=None):
+        from app.security.auth import RateLimitExceededError, RateLimitUnavailableError
+
+        if self.fail:
+            raise RateLimitUnavailableError()
+        key = (principal.subject, scope)
+        self.counts[key] = self.counts.get(key, 0) + 1
+        remaining = max(limit - self.counts[key], 0)
+        if self.counts[key] > limit:
+            raise RateLimitExceededError(60, limit, remaining)
+        return RateLimitDecision(limit=limit, remaining=remaining, retry_after=60)
+
+
 async def reset_schema(engine) -> None:
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
@@ -54,11 +73,24 @@ async def reset_schema(engine) -> None:
 async def api_client(
     *,
     auth_enabled: bool = True,
+    rate_limiter: FakeRateLimiter | None = None,
 ) -> AsyncIterator[tuple[AsyncClient, async_sessionmaker]]:
-    previous_auth_enabled = os.environ.get("AUTH_ENABLED")
-    previous_jwt_secret = os.environ.get("JWT_SECRET")
+    env_keys = (
+        "AUTH_ENABLED",
+        "JWT_SECRET",
+        "RATE_LIMIT_VIEWER_PER_MINUTE",
+        "RATE_LIMIT_OPERATOR_PER_MINUTE",
+        "RATE_LIMIT_ADMIN_PER_MINUTE",
+        "RATE_LIMIT_OPS_PER_MINUTE",
+        "MAX_REQUEST_BODY_BYTES",
+    )
+    previous_env = {key: os.environ.get(key) for key in env_keys}
     os.environ["AUTH_ENABLED"] = "true" if auth_enabled else "false"
     os.environ["JWT_SECRET"] = "test-secret"
+    os.environ.setdefault("RATE_LIMIT_VIEWER_PER_MINUTE", "120")
+    os.environ.setdefault("RATE_LIMIT_OPERATOR_PER_MINUTE", "90")
+    os.environ.setdefault("RATE_LIMIT_ADMIN_PER_MINUTE", "60")
+    os.environ.setdefault("RATE_LIMIT_OPS_PER_MINUTE", "20")
     get_settings.cache_clear()
     engine = create_async_engine(TEST_DATABASE_URL)
     await reset_schema(engine)
@@ -71,6 +103,7 @@ async def api_client(
 
     app.dependency_overrides[get_db_session] = override_session
     app.state.redis_dispatcher = InMemoryTaskDispatcher()
+    app.state.rate_limiter = rate_limiter or FakeRateLimiter()
     try:
         transport = ASGITransport(app=app)
         async with AsyncClient(
@@ -81,14 +114,11 @@ async def api_client(
     finally:
         app.dependency_overrides.clear()
         await engine.dispose()
-        if previous_auth_enabled is None:
-            os.environ.pop("AUTH_ENABLED", None)
-        else:
-            os.environ["AUTH_ENABLED"] = previous_auth_enabled
-        if previous_jwt_secret is None:
-            os.environ.pop("JWT_SECRET", None)
-        else:
-            os.environ["JWT_SECRET"] = previous_jwt_secret
+        for key, value in previous_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
         get_settings.cache_clear()
 
 
@@ -325,3 +355,144 @@ async def test_auth_disabled_mode_uses_internal_admin() -> None:
         )
 
         assert response.status_code == 201
+
+
+async def test_rate_limit_exceeded_shape_and_separate_principals() -> None:
+    previous_limit = os.environ.get("RATE_LIMIT_VIEWER_PER_MINUTE")
+    os.environ["RATE_LIMIT_VIEWER_PER_MINUTE"] = "1"
+    get_settings.cache_clear()
+    try:
+        async with api_client() as (client, _):
+            first = await client.get(
+                "/api/v1/workflows",
+                headers=auth_headers(Role.VIEWER),
+            )
+            second = await client.get(
+                "/api/v1/workflows",
+                headers=auth_headers(Role.VIEWER),
+            )
+            other = await client.get(
+                "/api/v1/workflows",
+                headers={
+                    "Authorization": (
+                        "Bearer "
+                        f"{create_access_token('another-viewer', Role.VIEWER)}"
+                    )
+                },
+            )
+
+            assert first.status_code == 200
+            assert second.status_code == 429
+            assert second.json()["error"]["code"] == "rate_limit_exceeded"
+            assert "Retry-After" in second.headers
+            assert other.status_code == 200
+    finally:
+        if previous_limit is None:
+            os.environ.pop("RATE_LIMIT_VIEWER_PER_MINUTE", None)
+        else:
+            os.environ["RATE_LIMIT_VIEWER_PER_MINUTE"] = previous_limit
+        get_settings.cache_clear()
+
+
+async def test_rate_limit_infrastructure_failure_returns_503() -> None:
+    async with api_client(rate_limiter=FakeRateLimiter(fail=True)) as (client, _):
+        response = await client.get(
+            "/api/v1/workflows",
+            headers=auth_headers(Role.VIEWER),
+        )
+
+        assert response.status_code == 503
+        assert response.json()["error"]["code"] == "rate_limit_unavailable"
+
+
+async def test_audit_success_denial_and_admin_listing() -> None:
+    async with api_client() as (client, _):
+        create_response = await client.post(
+            "/api/v1/workflows",
+            json=workflow_payload("wf-audit"),
+            headers={
+                **auth_headers(Role.OPERATOR),
+                "X-Request-ID": "request-audit-create",
+            },
+        )
+        denied_response = await client.post(
+            "/api/v1/ops/scheduler/tick",
+            headers={
+                **auth_headers(Role.OPERATOR),
+                "X-Request-ID": "request-audit-denied",
+            },
+        )
+        operator_audit = await client.get(
+            "/api/v1/ops/audit",
+            headers=auth_headers(Role.OPERATOR),
+        )
+        admin_audit = await client.get(
+            "/api/v1/ops/audit?limit=10&offset=0",
+            headers=auth_headers(Role.ADMIN),
+        )
+        filtered = await client.get(
+            "/api/v1/ops/audit?action=workflow.create",
+            headers=auth_headers(Role.ADMIN),
+        )
+
+        assert create_response.status_code == 201
+        assert denied_response.status_code == 403
+        assert operator_audit.status_code == 403
+        assert admin_audit.status_code == 200
+        actions = {item["action"] for item in admin_audit.json()["items"]}
+        assert "workflow.create" in actions
+        assert "authorization.denied" in actions
+        create_item = filtered.json()["items"][0]
+        assert create_item["request_id"] == "request-audit-create"
+        assert create_item["principal_subject"] == "operator-user"
+        assert create_item["principal_role"] == "operator"
+        assert "test-secret" not in admin_audit.text
+        assert "lease_token" not in admin_audit.text
+
+
+async def test_auth_disabled_principal_is_still_rate_limited() -> None:
+    previous_limit = os.environ.get("RATE_LIMIT_ADMIN_PER_MINUTE")
+    os.environ["RATE_LIMIT_ADMIN_PER_MINUTE"] = "1"
+    get_settings.cache_clear()
+    try:
+        async with api_client(auth_enabled=False) as (client, _):
+            first = await client.get("/api/v1/workflows")
+            second = await client.get("/api/v1/workflows")
+
+            assert first.status_code == 200
+            assert second.status_code == 429
+    finally:
+        if previous_limit is None:
+            os.environ.pop("RATE_LIMIT_ADMIN_PER_MINUTE", None)
+        else:
+            os.environ["RATE_LIMIT_ADMIN_PER_MINUTE"] = previous_limit
+        get_settings.cache_clear()
+
+
+async def test_security_headers_and_oversized_body() -> None:
+    previous_limit = os.environ.get("MAX_REQUEST_BODY_BYTES")
+    os.environ["MAX_REQUEST_BODY_BYTES"] = "64"
+    get_settings.cache_clear()
+    try:
+        async with api_client() as (client, _):
+            health = await client.get("/health")
+            oversized = await client.post(
+                "/api/v1/workflows",
+                content="x" * 65,
+                headers={
+                    **auth_headers(Role.OPERATOR),
+                    "Content-Type": "application/json",
+                },
+            )
+
+            assert health.status_code == 200
+            assert health.headers["X-Content-Type-Options"] == "nosniff"
+            assert health.headers["X-Frame-Options"] == "DENY"
+            assert oversized.status_code == 413
+            assert oversized.json()["error"]["code"] == "payload_too_large"
+    finally:
+        if previous_limit is None:
+            os.environ.pop("MAX_REQUEST_BODY_BYTES", None)
+        else:
+            os.environ["MAX_REQUEST_BODY_BYTES"] = previous_limit
+        get_settings.cache_clear()

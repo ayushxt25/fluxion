@@ -105,3 +105,23 @@ class OutboxPublishResponse(BaseModel):
 class LeaseReapResponse(BaseModel):
     reclaimed: int
     run_ids: tuple[str, ...]
+
+
+class AuditEventResponse(BaseModel):
+    id: str
+    occurred_at: datetime
+    request_id: str
+    principal_subject: str | None
+    principal_role: str | None
+    action: str
+    resource_type: str | None
+    resource_id: str | None
+    outcome: str
+    metadata: dict | None
+
+
+class AuditEventListResponse(BaseModel):
+    items: tuple[AuditEventResponse, ...]
+    limit: int
+    offset: int
+    count: int

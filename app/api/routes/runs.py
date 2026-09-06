@@ -1,9 +1,14 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_db_session, require_role
+from app.api.dependencies import (
+    get_current_principal,
+    get_db_session,
+    require_rate_limit,
+    require_role,
+)
 from app.api.pagination import LimitQuery, OffsetQuery
 from app.engine.exceptions import UnknownTaskRunError
 from app.engine.status import WorkflowStatus
@@ -14,7 +19,8 @@ from app.schemas.api import (
     WorkflowRunListResponse,
     WorkflowRunResponse,
 )
-from app.security.models import Role
+from app.security.models import Principal, Role
+from app.services.audit import AuditEventRepository, AuditService
 from app.services.management import WorkflowRunManagementService
 from app.services.repositories import (
     TaskAttemptRepository,
@@ -37,7 +43,7 @@ def _run_service(session: AsyncSession) -> WorkflowRunManagementService:
     "",
     response_model=WorkflowRunListResponse,
     summary="List workflow runs",
-    dependencies=[Depends(require_role(Role.VIEWER))],
+    dependencies=[Depends(require_role(Role.VIEWER)), Depends(require_rate_limit())],
 )
 async def list_runs(
     session: Annotated[AsyncSession, Depends(get_db_session)],
@@ -64,7 +70,7 @@ async def list_runs(
     "/{run_id}",
     response_model=WorkflowRunResponse,
     summary="Get run",
-    dependencies=[Depends(require_role(Role.VIEWER))],
+    dependencies=[Depends(require_role(Role.VIEWER)), Depends(require_rate_limit())],
 )
 async def get_run(
     run_id: str,
@@ -77,7 +83,7 @@ async def get_run(
     "/{run_id}/tasks",
     response_model=tuple[TaskRunResponse, ...],
     summary="List task runs",
-    dependencies=[Depends(require_role(Role.VIEWER))],
+    dependencies=[Depends(require_role(Role.VIEWER)), Depends(require_rate_limit())],
 )
 async def list_tasks(
     run_id: str,
@@ -90,7 +96,7 @@ async def list_tasks(
     "/{run_id}/tasks/{task_id}",
     response_model=TaskRunResponse,
     summary="Get task run",
-    dependencies=[Depends(require_role(Role.VIEWER))],
+    dependencies=[Depends(require_role(Role.VIEWER)), Depends(require_rate_limit())],
 )
 async def get_task(
     run_id: str,
@@ -108,7 +114,7 @@ async def get_task(
     "/{run_id}/tasks/{task_id}/attempts",
     response_model=TaskAttemptListResponse,
     summary="List task attempts",
-    dependencies=[Depends(require_role(Role.VIEWER))],
+    dependencies=[Depends(require_role(Role.VIEWER)), Depends(require_rate_limit())],
 )
 async def list_attempts(
     run_id: str,
@@ -123,36 +129,75 @@ async def list_attempts(
     "/{run_id}/cancel",
     response_model=WorkflowRunResponse,
     summary="Cancel workflow run",
-    dependencies=[Depends(require_role(Role.OPERATOR))],
+    dependencies=[
+        Depends(require_role(Role.OPERATOR)),
+        Depends(require_rate_limit()),
+    ],
 )
 async def cancel_run(
     run_id: str,
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[Principal, Depends(get_current_principal)],
 ) -> WorkflowRunResponse:
-    return await _run_service(session).cancel_run(run_id)
+    run = await _run_service(session).cancel_run(run_id)
+    await AuditService(AuditEventRepository(session)).record_success(
+        request_id=getattr(request.state, "request_id", ""),
+        principal=principal,
+        action="run.cancel",
+        resource_type="run",
+        resource_id=run_id,
+    )
+    return run
 
 
 @router.post(
     "/{run_id}/recover",
     response_model=RecoveryResponse,
     summary="Recover workflow run state",
-    dependencies=[Depends(require_role(Role.OPERATOR))],
+    dependencies=[
+        Depends(require_role(Role.OPERATOR)),
+        Depends(require_rate_limit()),
+    ],
 )
 async def recover_run(
     run_id: str,
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[Principal, Depends(get_current_principal)],
 ) -> RecoveryResponse:
-    return await _run_service(session).recover_run(run_id)
+    result = await _run_service(session).recover_run(run_id)
+    await AuditService(AuditEventRepository(session)).record_success(
+        request_id=getattr(request.state, "request_id", ""),
+        principal=principal,
+        action="run.recover",
+        resource_type="run",
+        resource_id=run_id,
+    )
+    return result
 
 
 @router.post(
     "/{run_id}/resume",
     response_model=WorkflowRunResponse,
     summary="Validate run continuation",
-    dependencies=[Depends(require_role(Role.OPERATOR))],
+    dependencies=[
+        Depends(require_role(Role.OPERATOR)),
+        Depends(require_rate_limit()),
+    ],
 )
 async def continue_run(
     run_id: str,
+    request: Request,
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[Principal, Depends(get_current_principal)],
 ) -> WorkflowRunResponse:
-    return await _run_service(session).continue_run(run_id)
+    run = await _run_service(session).continue_run(run_id)
+    await AuditService(AuditEventRepository(session)).record_success(
+        request_id=getattr(request.state, "request_id", ""),
+        principal=principal,
+        action="run.resume",
+        resource_type="run",
+        resource_id=run_id,
+    )
+    return run
