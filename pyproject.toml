@@ -33,6 +33,7 @@ fluxion-scheduler = "app.runtime.scheduler:main"
 fluxion-publisher = "app.runtime.publisher:main"
 fluxion-reaper = "app.runtime.reaper:main"
 fluxion-worker = "app.runtime.worker:main"
+fluxion-demo = "app.runtime.demo:cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]

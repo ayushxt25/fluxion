@@ -26,6 +26,10 @@ process metrics at `/metrics`, and a readiness probe at `/ready`.
 Phase 18 adds process entrypoints and Docker Compose wiring for a local
 multi-process cluster with separate API, scheduler, publisher, reaper, worker,
 PostgreSQL, Redis, and migration roles.
+Phase 19 adds a built-in deterministic demo task pack and a `fluxion demo`
+smoke command that drives the public API and proves the distributed execution
+path through scheduler, transactional outbox, Redis, worker leasing, task
+execution, downstream unlock, and durable workflow success.
 
 ## Planned Capabilities
 
@@ -76,8 +80,10 @@ After installing the package, Fluxion exposes console scripts:
 - `fluxion-publisher`
 - `fluxion-reaper`
 - `fluxion-worker`
+- `fluxion-demo`
 
-The equivalent grouped command is `fluxion api|scheduler|publisher|reaper|worker`.
+The equivalent grouped command is
+`fluxion api|scheduler|publisher|reaper|worker|demo`.
 Each process loads settings once, configures logging once, opens shared
 PostgreSQL/Redis resources for its role, and shuts down on `SIGINT`/`SIGTERM`.
 
@@ -105,9 +111,51 @@ does not label metrics by run ID, workflow ID, task ID, request ID, or user.
 
 Worker task implementations are not uploaded through the API. Deployments
 register task callables by editing the application-side hook:
-`app.tasks.registry.build_task_registry()`. The default hook returns an empty
-registry so local deployments must provide implementations for dispatched task
-IDs.
+`app.tasks.registry.build_task_registry()`. The default hook registers only the
+safe built-in demo tasks `demo.prepare`, `demo.process`, and `demo.finalize` so
+local smoke tests can run without arbitrary code upload.
+
+## Demo Smoke Test
+
+With the local cluster running, the demo command creates a unique workflow and
+run through the public API, then polls until the distributed worker completes
+all demo tasks:
+
+```bash
+export FLUXION_API_URL=http://localhost:8000
+export FLUXION_API_TOKEN=<operator-or-admin-jwt>
+fluxion demo
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:FLUXION_API_URL="http://localhost:8001"
+$env:FLUXION_API_TOKEN="<operator-or-admin-jwt>"
+fluxion demo
+```
+
+`FLUXION_API_URL` is configurable because local Docker port mappings may vary.
+If `AUTH_ENABLED=false`, the token can be omitted. The command also accepts
+`--api-url`, `--token`, `--timeout`, and `--poll`.
+
+Expected output is concise:
+
+```text
+Created workflow: demo-workflow-...
+Created run: demo-run-...
+Run status: RUNNING
+demo.prepare: SUCCEEDED
+demo.process: SUCCEEDED
+demo.finalize: SUCCEEDED
+Workflow: SUCCEEDED
+```
+
+The demo proves the API-to-worker path: workflow persistence, run persistence,
+scheduler dispatch intent, outbox publication, Redis transport, worker claim,
+lease/heartbeat infrastructure, task execution, dependent unlock, and durable
+workflow completion. The built-in demo tasks are deterministic verification
+tasks for local smoke testing, not production business logic.
 
 ## Docker Compose
 
@@ -262,6 +310,9 @@ implementations must already be deployed and registered in worker processes.
 The API does not expose lease tokens, and unpublished outbox dispatches whose
 task is later cancelled are discarded instead of being published as stale Redis
 messages.
+The built-in demo task pack is intentionally tiny and side-effect free. Real
+deployments should replace or extend the registry hook with their own audited
+task implementations.
 
 For Phase 2, a failed task or individually cancelled task marks the workflow run
 as failed because successful completion is no longer possible. Explicit workflow

@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_format: str = "json"
     readiness_timeout_seconds: float = 2
+    fluxion_api_url: str = "http://localhost:8000"
+    fluxion_api_token: str | None = None
+    demo_timeout_seconds: float = 30
+    demo_poll_seconds: float = 1.0
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -93,6 +97,10 @@ class Settings(BaseSettings):
             raise ValueError("LOG_FORMAT must be either json or text.")
         if self.readiness_timeout_seconds <= 0:
             raise ValueError("READINESS_TIMEOUT_SECONDS must be positive.")
+        if self.demo_timeout_seconds <= 0:
+            raise ValueError("DEMO_TIMEOUT_SECONDS must be positive.")
+        if self.demo_poll_seconds <= 0:
+            raise ValueError("DEMO_POLL_SECONDS must be positive.")
         return self
 
 
