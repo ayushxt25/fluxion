@@ -15,14 +15,17 @@ from app.engine.exceptions import (
     DispatchStateError,
     InvalidWorkerLeaseConfigurationError,
     LeaseLostError,
+    TaskResultValidationError,
 )
 from app.engine.execution import TaskAttempt, WorkflowRun
 from app.engine.registry import TaskCallable, TaskRegistry
+from app.engine.results import JSONValue, normalize_task_result
 from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
 from app.observability.metrics import (
     record_task_attempt_failed,
     record_task_attempt_started,
     record_task_attempt_succeeded,
+    record_task_result_validation_failed,
     record_task_retry,
 )
 from app.schemas.workflow import WorkflowDefinition
@@ -92,6 +95,7 @@ class TaskWorker:
             if isinstance(task_registry, TaskRegistry)
             else TaskRegistry(task_registry)
         )
+        self._max_result_bytes = get_settings().max_task_result_bytes
 
     async def run_once(self, timeout: float | None = None) -> TaskWorkerResult | None:
         message = await self._dispatcher.receive(timeout)
@@ -133,9 +137,15 @@ class TaskWorker:
         )
 
         error: str | None = None
+        result: JSONValue = None
         started = time.perf_counter()
         try:
-            await self._call_task_with_heartbeat(message, running_attempt, workflow_run)
+            result = await self._call_task_with_heartbeat(
+                message,
+                running_attempt,
+                workflow_run,
+            )
+            result = normalize_task_result(result, self._max_result_bytes)
         except Exception as exc:  # noqa: BLE001
             if isinstance(exc, LeaseLostError):
                 record_task_attempt_failed(time.perf_counter() - started)
@@ -151,10 +161,12 @@ class TaskWorker:
                     },
                 )
                 raise
+            if isinstance(exc, TaskResultValidationError):
+                record_task_result_validation_failed()
             error = f"{type(exc).__name__}: {exc}"
 
         if error is None:
-            workflow_run.complete_task(message.task_id)
+            workflow_run.complete_task(message.task_id, result=result)
             await self._attempt_repository.finish_leased_attempt(
                 workflow_run,
                 running_attempt,
@@ -284,7 +296,7 @@ class TaskWorker:
         message: TaskDispatchMessage,
         attempt: TaskAttempt,
         workflow_run: WorkflowRun,
-    ) -> None:
+    ) -> object:
         callable_task = asyncio.create_task(
             self._call_task(message, attempt, workflow_run)
         )
@@ -306,13 +318,13 @@ class TaskWorker:
             heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
                 await heartbeat_task
-        await callable_task
+        return await callable_task
 
     async def _heartbeat_until_done(
         self,
         message: TaskDispatchMessage,
         attempt: TaskAttempt,
-        callable_task: asyncio.Task[None],
+        callable_task: asyncio.Task[object],
     ) -> None:
         while not callable_task.done():
             await asyncio.sleep(self._heartbeat_seconds)
@@ -333,7 +345,7 @@ class TaskWorker:
         message: TaskDispatchMessage,
         attempt: TaskAttempt,
         workflow_run: WorkflowRun,
-    ) -> None:
+    ) -> object:
         binding = self._registry.binding(message.task_id)
         arguments = ()
         if binding.accepts_context:
@@ -347,15 +359,18 @@ class TaskWorker:
                     idempotency_key=workflow_run.task_runs[
                         message.task_id
                     ].idempotency_key,
+                    dependency_results=workflow_run.direct_dependency_results(
+                        message.task_id
+                    ),
                 ),
             )
 
         if binding.is_async:
-            await binding.implementation(*arguments)
-        else:
-            result = await asyncio.to_thread(binding.implementation, *arguments)
-            if inspect.isawaitable(result):
-                await result
+            return await binding.implementation(*arguments)
+        result = await asyncio.to_thread(binding.implementation, *arguments)
+        if inspect.isawaitable(result):
+            return await result
+        return result
 
     def _retry_time(
         self,

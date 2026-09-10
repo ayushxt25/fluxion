@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -75,6 +76,13 @@ class TaskRunRecord(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     idempotency_key: Mapped[str] = mapped_column(String(768), nullable=False)
+    result: Mapped[dict | list | str | int | float | bool | None] = mapped_column(JSONB)
+    result_present: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
 
     workflow_run: Mapped[WorkflowRunRecord] = relationship(
         back_populates="task_runs",

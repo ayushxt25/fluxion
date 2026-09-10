@@ -171,6 +171,8 @@ def _run_response(
             idempotency_key=(
                 task_run.idempotency_key or f"{workflow_run.run_id}:{task_id}"
             ),
+            result=task_run.result if task_run.result_present else None,
+            has_result=task_run.result_present,
             attempt_count=len(attempts_by_task[task_id]),
             latest_attempt_status=(
                 attempts_by_task[task_id][-1].status.value

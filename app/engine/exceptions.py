@@ -66,6 +66,11 @@ class WorkflowAlreadyTerminalError(ExecutionStateError):
         super().__init__(f"Workflow run '{run_id}' is already terminal: '{status}'.")
 
 
+class TaskResultValidationError(ExecutionStateError):
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"Task result is invalid: {reason}")
+
+
 class TaskImplementationError(Exception):
     """Base exception for task implementation registry errors."""
 

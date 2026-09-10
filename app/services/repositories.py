@@ -271,6 +271,8 @@ class WorkflowRunRepository:
                             next_retry_at=task_run.next_retry_at,
                             idempotency_key=task_run.idempotency_key
                             or f"{workflow_run.run_id}:{task_id}",
+                            result=task_run.result,
+                            result_present=task_run.result_present,
                         )
                         for task_id, task_run in workflow_run.task_runs.items()
                     ]
@@ -306,6 +308,13 @@ class WorkflowRunRepository:
                     task_run.task_id: task_run.idempotency_key
                     for task_run in record.task_runs
                 }
+                results = {
+                    task_run.task_id: task_run.result for task_run in record.task_runs
+                }
+                result_present = {
+                    task_run.task_id: task_run.result_present
+                    for task_run in record.task_runs
+                }
             except ValueError as exc:
                 raise RecoveryStateError(
                     run_id,
@@ -320,6 +329,8 @@ class WorkflowRunRepository:
                     task_statuses=task_statuses,
                     next_retry_at=next_retry_at,
                     idempotency_keys=idempotency_keys,
+                    results=results,
+                    result_present=result_present,
                 )
             except UnknownTaskRunError as exc:
                 raise RecoveryStateError(
@@ -428,6 +439,8 @@ class WorkflowRunRepository:
                 task_records[task_id].idempotency_key = (
                     task_run.idempotency_key or f"{workflow_run.run_id}:{task_id}"
                 )
+                task_records[task_id].result = task_run.result
+                task_records[task_id].result_present = task_run.result_present
 
 
 class DispatchOutboxRepository:
@@ -775,6 +788,8 @@ class DispatchOutboxRepository:
             task_records[task_id].idempotency_key = (
                 task_run.idempotency_key or f"{workflow_run.run_id}:{task_id}"
             )
+            task_records[task_id].result = task_run.result
+            task_records[task_id].result_present = task_run.result_present
 
 
 class TaskAttemptRepository:
@@ -1173,6 +1188,8 @@ class TaskAttemptRepository:
             task_records[task_id].idempotency_key = (
                 task_run.idempotency_key or f"{workflow_run.run_id}:{task_id}"
             )
+            task_records[task_id].result = task_run.result
+            task_records[task_id].result_present = task_run.result_present
 
 
 def _add_seconds(value: datetime, seconds: float) -> datetime:

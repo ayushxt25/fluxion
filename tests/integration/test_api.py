@@ -28,6 +28,7 @@ from app.db import models  # noqa: F401
 from app.db.base import Base
 from app.dispatch.transport import InMemoryTaskDispatcher
 from app.engine.execution import WorkflowRun
+from app.engine.status import AttemptStatus
 from app.main import create_app
 from app.observability.context import get_log_context
 from app.observability.metrics import reset_metrics_for_tests
@@ -294,6 +295,44 @@ async def test_attempt_response_excludes_lease_token() -> None:
 
         assert response.status_code == 200
         assert "lease_token" not in response.text
+
+
+async def test_task_inspection_returns_durable_result() -> None:
+    async def seed(session_factory) -> None:
+        async with session_factory() as session:
+            definition = WorkflowDefinition(
+                id="wf-result-api",
+                name="Workflow",
+                tasks=(TaskDefinition(id="a"),),
+            )
+            await WorkflowRepository(session).save(definition)
+            run = WorkflowRun.create("run-result", definition)
+            await WorkflowRunRepository(session).create(run)
+            run.start_task("a")
+            attempt = await TaskAttemptRepository(session).create_running_attempt(
+                run,
+                "a",
+                1,
+                datetime.now(UTC),
+            )
+            run.complete_task("a", result={"value": 42})
+            await TaskAttemptRepository(session).finish_attempt(
+                run,
+                attempt,
+                AttemptStatus.SUCCEEDED,
+                datetime.now(UTC),
+            )
+
+    async with api_client() as (client, session_factory):
+        await seed(session_factory)
+        response = await client.get(
+            "/api/v1/runs/run-result/tasks/a",
+            headers=auth_headers(Role.VIEWER),
+        )
+
+        assert response.status_code == 200
+        assert response.json()["result"] == {"value": 42}
+        assert response.json()["has_result"] is True
 
 
 async def test_cancelled_dispatched_outbox_is_discarded_not_published() -> None:

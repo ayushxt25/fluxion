@@ -111,18 +111,23 @@ def test_demo_distributed_e2e_happy_path() -> None:
         prepare_started = asyncio.Event()
         prepare_release = asyncio.Event()
 
-        async def prepare(context: TaskExecutionContext) -> None:
+        async def prepare(context: TaskExecutionContext) -> dict[str, int]:
             calls.append("demo.prepare")
             contexts.append(context)
             prepare_started.set()
             await prepare_release.wait()
+            return {"value": 21}
 
-        def process() -> None:
+        def process(context: TaskExecutionContext) -> dict[str, int]:
             calls.append("demo.process")
+            assert context.dependency_results["demo.prepare"] == {"value": 21}
+            return {"value": 42}
 
-        async def finalize(context: TaskExecutionContext) -> None:
+        async def finalize(context: TaskExecutionContext) -> dict[str, object]:
             calls.append("demo.finalize")
             contexts.append(context)
+            assert context.dependency_results["demo.process"] == {"value": 42}
+            return {"status": "complete", "value": 42}
 
         registry = {
             "demo.prepare": prepare,
@@ -242,6 +247,12 @@ def test_demo_distributed_e2e_happy_path() -> None:
                 final_run.get_task_status(task_id) == TaskStatus.SUCCEEDED
                 for task_id in DEMO_TASK_IDS
             )
+            assert final_run.task_runs["demo.prepare"].result == {"value": 21}
+            assert final_run.task_runs["demo.process"].result == {"value": 42}
+            assert final_run.task_runs["demo.finalize"].result == {
+                "status": "complete",
+                "value": 42,
+            }
             assert Counter(calls) == Counter(
                 {
                     "demo.prepare": 1,

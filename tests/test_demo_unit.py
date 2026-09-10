@@ -52,7 +52,7 @@ def test_demo_task_registry_contains_expected_tasks() -> None:
 
 
 def test_context_aware_demo_tasks_work() -> None:
-    context = TaskExecutionContext(
+    prepare_context = TaskExecutionContext(
         workflow_id="wf",
         run_id="run",
         task_id="demo.prepare",
@@ -62,8 +62,40 @@ def test_context_aware_demo_tasks_work() -> None:
     )
     tasks = build_demo_tasks()
 
-    asyncio.run(tasks["demo.prepare"](context))
-    asyncio.run(tasks["demo.finalize"](context))
+    prepare_result = asyncio.run(tasks["demo.prepare"](prepare_context))
+    process_result = tasks["demo.process"](
+        TaskExecutionContext(
+            workflow_id="wf",
+            run_id="run",
+            task_id="demo.process",
+            attempt_number=1,
+            attempt_key="run:demo.process:1",
+            idempotency_key="run:demo.process",
+            dependency_results={"demo.prepare": prepare_result},
+        )
+    )
+    finalize_result = asyncio.run(
+        tasks["demo.finalize"](
+            TaskExecutionContext(
+                workflow_id="wf",
+                run_id="run",
+                task_id="demo.finalize",
+                attempt_number=1,
+                attempt_key="run:demo.finalize:1",
+                idempotency_key="run:demo.finalize",
+                dependency_results={"demo.process": process_result},
+            )
+        )
+    )
+
+    assert prepare_result == {"task": "demo.prepare", "value": 21}
+    assert process_result == {"task": "demo.process", "value": 42}
+    assert finalize_result == {
+        "task": "demo.finalize",
+        "prepared": 21,
+        "processed": 42,
+        "status": "complete",
+    }
 
 
 def test_unique_demo_ids() -> None:

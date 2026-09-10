@@ -30,6 +30,8 @@ Phase 19 adds a built-in deterministic demo task pack and a `fluxion demo`
 smoke command that drives the public API and proves the distributed execution
 path through scheduler, transactional outbox, Redis, worker leasing, task
 execution, downstream unlock, and durable workflow success.
+Phase 20 adds durable JSON task results and direct dependency data passing
+through `TaskExecutionContext.dependency_results`.
 
 ## Planned Capabilities
 
@@ -153,9 +155,36 @@ Workflow: SUCCEEDED
 
 The demo proves the API-to-worker path: workflow persistence, run persistence,
 scheduler dispatch intent, outbox publication, Redis transport, worker claim,
-lease/heartbeat infrastructure, task execution, dependent unlock, and durable
-workflow completion. The built-in demo tasks are deterministic verification
-tasks for local smoke testing, not production business logic.
+lease/heartbeat infrastructure, task execution, dependency result passing,
+dependent unlock, and durable workflow completion. The built-in demo tasks are
+deterministic verification tasks for local smoke testing, not production
+business logic. `demo.prepare` returns `{"value": 21}`, `demo.process` reads
+that direct dependency result and returns `{"value": 42}`, and `demo.finalize`
+returns a final summary.
+
+## Task Results
+
+Successful task callables may return `None` or a JSON-serializable value:
+objects, arrays, strings, numbers, booleans, or null. Fluxion never pickles
+task outputs and does not support binary results. Before a task can become
+durably `SUCCEEDED`, its canonical result is JSON-normalized and persisted on
+the `task_runs` row in the same transaction as the success transition.
+
+Context-aware downstream tasks receive an immutable
+`dependency_results` mapping in `TaskExecutionContext`. It contains only direct
+dependencies, and each dependency must already be `SUCCEEDED`; root tasks
+receive an empty mapping. A task that returned `None` is stored as a present
+JSON null result, distinct internally from a task that has never succeeded.
+
+`MAX_TASK_RESULT_BYTES` limits the UTF-8 encoded JSON result size and defaults
+to 262144 bytes. Unsupported or oversized results are treated like ordinary
+task failures and follow existing retry policy. Failed attempts do not write a
+canonical task result; the final successful retry writes the task result.
+Recovery, resume, and cancellation preserve already successful task results.
+Task inspection API responses include `result` and `has_result`.
+
+Fluxion does not yet provide artifact storage, blob storage, result streaming,
+schema registries, cross-workflow data sharing, or secret/result templating.
 
 ## Docker Compose
 
@@ -305,7 +334,7 @@ protected by network controls in production.
 
 There is no public login, user database, OAuth/OIDC provider, refresh token
 flow, per-workflow ACL, SIEM export, OpenTelemetry tracing, external log
-service, alerting system, or rate-limit fallback store yet. Worker
+service, alerting system, object/blob result store, or rate-limit fallback store yet. Worker
 implementations must already be deployed and registered in worker processes.
 The API does not expose lease tokens, and unpublished outbox dispatches whose
 task is later cancelled are discarded instead of being published as stale Redis

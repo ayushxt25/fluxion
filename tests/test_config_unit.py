@@ -59,14 +59,17 @@ def test_demo_configuration_validation() -> None:
         fluxion_api_token="token",
         demo_timeout_seconds=5,
         demo_poll_seconds=0.1,
+        max_task_result_bytes=1024,
     )
 
     assert settings.fluxion_api_url == "http://localhost:8001"
     assert settings.fluxion_api_token == "token"
+    assert settings.max_task_result_bytes == 1024
 
     for values in (
         {"demo_timeout_seconds": 0},
         {"demo_poll_seconds": 0},
+        {"max_task_result_bytes": 0},
     ):
         with pytest.raises(ValidationError):
             Settings(**values)

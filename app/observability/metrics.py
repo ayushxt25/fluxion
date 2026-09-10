@@ -161,6 +161,10 @@ def record_task_retry() -> None:
     registry.inc_counter("fluxion_task_retries_total")
 
 
+def record_task_result_validation_failed() -> None:
+    registry.inc_counter("fluxion_task_result_validation_failures_total")
+
+
 def record_outbox_publish(
     *,
     outcome: str,

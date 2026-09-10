@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -30,6 +31,8 @@ class TaskRunResponse(BaseModel):
     status: str
     next_retry_at: datetime | None
     idempotency_key: str
+    result: Any = None
+    has_result: bool = False
     attempt_count: int
     latest_attempt_status: str | None
     dependencies: tuple[str, ...] = ()

@@ -10,6 +10,7 @@ from app.engine.dag import WorkflowDAG
 from app.engine.exceptions import InvalidConcurrencyLimitError
 from app.engine.execution import WorkflowRun
 from app.engine.registry import TaskCallable, TaskRegistry
+from app.engine.results import JSONValue, normalize_task_result
 from app.engine.status import TaskStatus, WorkflowStatus
 from app.schemas.workflow import WorkflowDefinition
 
@@ -40,9 +41,12 @@ class WorkflowExecutor:
         dag: WorkflowDAG | None = None,
         run_id: str | None = None,
         max_concurrency: int | None = None,
+        max_task_result_bytes: int = 262144,
     ) -> None:
         if max_concurrency is not None and max_concurrency <= 0:
             raise InvalidConcurrencyLimitError(max_concurrency)
+        if max_task_result_bytes <= 0:
+            raise ValueError("max_task_result_bytes must be positive.")
 
         self._workflow = workflow
         self._dag = dag or WorkflowDAG(workflow)
@@ -53,11 +57,13 @@ class WorkflowExecutor:
         )
         self._run = WorkflowRun.create(run_id or str(uuid4()), workflow, self._dag)
         self._max_concurrency = max_concurrency
+        self._max_task_result_bytes = max_task_result_bytes
         self._errors: dict[str, str] = {}
+        self._results: dict[str, JSONValue] = {}
 
     async def run(self) -> WorkflowExecutionResult:
         self._registry.validate_workflow(self._workflow)
-        running: dict[asyncio.Task[str | None], str] = {}
+        running: dict[asyncio.Task[tuple[str, JSONValue, str | None]], str] = {}
 
         while True:
             if self._run.status != WorkflowStatus.FAILED:
@@ -76,7 +82,7 @@ class WorkflowExecutor:
 
     def _schedule_ready_tasks(
         self,
-        running: dict[asyncio.Task[str | None], str],
+        running: dict[asyncio.Task[tuple[str, JSONValue, str | None]], str],
     ) -> None:
         open_slots = self._open_slots(len(running))
         for task_id in self._run.ready_tasks()[:open_slots]:
@@ -91,13 +97,13 @@ class WorkflowExecutor:
 
     def _process_completed_tasks(
         self,
-        done: set[asyncio.Task[str | None]],
-        running: dict[asyncio.Task[str | None], str],
+        done: set[asyncio.Task[tuple[str, JSONValue, str | None]]],
+        running: dict[asyncio.Task[tuple[str, JSONValue, str | None]], str],
     ) -> None:
         completed = sorted((running.pop(task), task) for task in done)
 
         for task_id, task in completed:
-            error = task.result()
+            _, _, error = task.result()
             if error is not None:
                 self._errors[task_id] = error
                 self._run.fail_task(task_id)
@@ -105,17 +111,19 @@ class WorkflowExecutor:
         for task_id, task in completed:
             if task_id in self._errors:
                 continue
-            task.result()
-            self._run.complete_task(task_id)
+            _, result, _ = task.result()
+            self._results[task_id] = result
+            self._run.complete_task(task_id, result=result)
 
-    async def _execute_task(self, task_id: str) -> str | None:
+    async def _execute_task(self, task_id: str) -> tuple[str, JSONValue, str | None]:
         try:
-            await self._call_task(task_id)
+            result = await self._call_task(task_id)
+            result = normalize_task_result(result, self._max_task_result_bytes)
         except Exception as exc:  # noqa: BLE001
-            return f"{type(exc).__name__}: {exc}"
-        return None
+            return task_id, None, f"{type(exc).__name__}: {exc}"
+        return task_id, result, None
 
-    async def _call_task(self, task_id: str) -> None:
+    async def _call_task(self, task_id: str) -> object:
         binding = self._registry.binding(task_id)
         arguments = ()
         if binding.accepts_context:
@@ -127,15 +135,16 @@ class WorkflowExecutor:
                     attempt_number=1,
                     attempt_key=f"{self._run.run_id}:{task_id}:1",
                     idempotency_key=f"{self._run.run_id}:{task_id}",
+                    dependency_results=self._run.direct_dependency_results(task_id),
                 ),
             )
 
         if binding.is_async:
-            await binding.implementation(*arguments)
-        else:
-            result = await asyncio.to_thread(binding.implementation, *arguments)
-            if inspect.isawaitable(result):
-                await result
+            return await binding.implementation(*arguments)
+        result = await asyncio.to_thread(binding.implementation, *arguments)
+        if inspect.isawaitable(result):
+            return await result
+        return result
 
     def _snapshot(self) -> WorkflowExecutionResult:
         return WorkflowExecutionResult(

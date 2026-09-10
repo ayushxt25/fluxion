@@ -9,6 +9,7 @@ from app.engine.exceptions import (
     UnknownTaskRunError,
     WorkflowAlreadyTerminalError,
 )
+from app.engine.results import JSONValue, clone_json_value
 from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
 from app.schemas.workflow import WorkflowDefinition
 
@@ -36,6 +37,8 @@ class TaskRun:
     status: TaskStatus
     next_retry_at: datetime | None = None
     idempotency_key: str | None = None
+    result: JSONValue = None
+    result_present: bool = False
 
 
 @dataclass(frozen=True)
@@ -100,6 +103,8 @@ class WorkflowRun:
         task_statuses: dict[str, TaskStatus],
         next_retry_at: dict[str, datetime | None] | None = None,
         idempotency_keys: dict[str, str] | None = None,
+        results: dict[str, JSONValue] | None = None,
+        result_present: dict[str, bool] | None = None,
         dag: WorkflowDAG | None = None,
     ) -> "WorkflowRun":
         workflow_dag = dag or WorkflowDAG(workflow)
@@ -123,6 +128,8 @@ class WorkflowRun:
                     task_id,
                     f"{run_id}:{task_id}",
                 ),
+                result=clone_json_value((results or {}).get(task_id)),
+                result_present=(result_present or {}).get(task_id, False),
             )
             for task_id in workflow_dag.topological_order()
         }
@@ -148,6 +155,21 @@ class WorkflowRun:
             )
         )
 
+    def direct_dependency_results(self, task_id: str) -> dict[str, JSONValue]:
+        self._get_task_run(task_id)
+        results: dict[str, JSONValue] = {}
+        for dependency_id in self._dag.dependencies_of(task_id):
+            dependency = self._get_task_run(dependency_id)
+            if dependency.status != TaskStatus.SUCCEEDED:
+                raise RecoveryStateError(
+                    self.run_id,
+                    f"dependency '{dependency_id}' for task '{task_id}' "
+                    "has not succeeded.",
+                )
+            if dependency.result_present:
+                results[dependency_id] = clone_json_value(dependency.result)
+        return results
+
     def start_task(self, task_id: str) -> None:
         self._ensure_workflow_can_advance()
         self._transition_task(task_id, TaskStatus.RUNNING)
@@ -163,10 +185,15 @@ class WorkflowRun:
         self._transition_task(task_id, TaskStatus.RUNNING)
         self._status = WorkflowStatus.RUNNING
 
-    def complete_task(self, task_id: str) -> None:
+    def complete_task(self, task_id: str, result: JSONValue = None) -> None:
         workflow_already_failed = self._status == WorkflowStatus.FAILED
         self._ensure_task_can_finish(task_id)
-        self._transition_task(task_id, TaskStatus.SUCCEEDED)
+        self._transition_task(
+            task_id,
+            TaskStatus.SUCCEEDED,
+            result=result,
+            result_present=True,
+        )
         if not workflow_already_failed:
             self._unlock_ready_dependents(task_id)
         self._refresh_terminal_status()
@@ -202,6 +229,8 @@ class WorkflowRun:
                     task_id=task_run.task_id,
                     status=TaskStatus.CANCELLED,
                     idempotency_key=task_run.idempotency_key,
+                    result=clone_json_value(task_run.result),
+                    result_present=task_run.result_present,
                 )
 
         self._status = WorkflowStatus.CANCELLED
@@ -234,6 +263,8 @@ class WorkflowRun:
                 task_id=task_id,
                 status=TaskStatus.INTERRUPTED,
                 idempotency_key=self._task_runs[task_id].idempotency_key,
+                result=clone_json_value(self._task_runs[task_id].result),
+                result_present=self._task_runs[task_id].result_present,
             )
 
         if interrupted:
@@ -277,6 +308,8 @@ class WorkflowRun:
                     status=next_status,
                     next_retry_at=None,
                     idempotency_key=task_run.idempotency_key,
+                    result=clone_json_value(task_run.result),
+                    result_present=task_run.result_present,
                 )
 
     def _validate_recoverable_state(self) -> None:
@@ -335,6 +368,8 @@ class WorkflowRun:
         task_id: str,
         next_status: TaskStatus,
         next_retry_at: datetime | None = None,
+        result: JSONValue = None,
+        result_present: bool | None = None,
     ) -> None:
         task_run = self._get_task_run(task_id)
         allowed = _VALID_TASK_TRANSITIONS.get(task_run.status, set())
@@ -347,6 +382,12 @@ class WorkflowRun:
             status=next_status,
             next_retry_at=next_retry_at,
             idempotency_key=task_run.idempotency_key,
+            result=clone_json_value(result)
+            if result_present is True
+            else clone_json_value(task_run.result),
+            result_present=task_run.result_present
+            if result_present is None
+            else result_present,
         )
 
     def _unlock_ready_dependents(self, task_id: str) -> None:

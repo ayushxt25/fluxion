@@ -1,9 +1,11 @@
 import asyncio
 import inspect
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from app.core.config import get_settings
 from app.engine.context import TaskExecutionContext
 from app.engine.dag import WorkflowDAG
 from app.engine.exceptions import (
@@ -11,17 +13,20 @@ from app.engine.exceptions import (
     InvalidConcurrencyLimitError,
     LeaseClaimError,
     LeaseLostError,
+    TaskResultValidationError,
     WorkflowNotFoundError,
     WorkflowRunAlreadyExistsError,
 )
 from app.engine.execution import TaskAttempt, WorkflowRun
 from app.engine.executor import WorkflowExecutionResult
 from app.engine.registry import TaskCallable, TaskRegistry
+from app.engine.results import JSONValue, normalize_task_result
 from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
 from app.observability.metrics import (
     record_task_attempt_failed,
     record_task_attempt_started,
     record_task_attempt_succeeded,
+    record_task_result_validation_failed,
     record_task_retry,
 )
 from app.schemas.workflow import WorkflowDefinition
@@ -41,6 +46,13 @@ class _SystemClock:
 class _AsyncSleeper:
     async def sleep(self, seconds: float) -> None:
         await asyncio.sleep(seconds)
+
+
+@dataclass(frozen=True)
+class _TaskExecutionOutcome:
+    task_id: str
+    result: JSONValue
+    error: str | None
 
 
 class _InMemoryTaskAttemptRepository:
@@ -369,6 +381,7 @@ class PersistentWorkflowExecutor:
         )
         self._run = WorkflowRun.create(run_id or str(uuid4()), workflow, self._dag)
         self._max_concurrency = max_concurrency
+        self._max_result_bytes = get_settings().max_task_result_bytes
 
     async def run(self) -> WorkflowExecutionResult:
         self._registry.validate_workflow(self._workflow)
@@ -415,12 +428,13 @@ class _DurableWorkflowRunner:
         self._max_concurrency = max_concurrency
         self._clock = clock or _SystemClock()
         self._sleeper = sleeper or _AsyncSleeper()
+        self._max_result_bytes = get_settings().max_task_result_bytes
         self._errors: dict[str, str] = {}
         self._attempt_durations: dict[tuple[str, str, int], float] = {}
 
     async def run(self) -> WorkflowExecutionResult:
         running: dict[
-            asyncio.Task[tuple[str, str | None]],
+            asyncio.Task[_TaskExecutionOutcome],
             tuple[str, TaskAttempt],
         ] = {}
 
@@ -450,7 +464,7 @@ class _DurableWorkflowRunner:
 
     async def _schedule_ready_tasks(
         self,
-        running: dict[asyncio.Task[tuple[str, str | None]], tuple[str, TaskAttempt]],
+        running: dict[asyncio.Task[_TaskExecutionOutcome], tuple[str, TaskAttempt]],
     ) -> None:
         open_slots = self._open_slots(len(running))
         for task_id in self._run.ready_tasks()[:open_slots]:
@@ -482,8 +496,8 @@ class _DurableWorkflowRunner:
 
     async def _process_completed_tasks(
         self,
-        done: set[asyncio.Task[tuple[str, str | None]]],
-        running: dict[asyncio.Task[tuple[str, str | None]], tuple[str, TaskAttempt]],
+        done: set[asyncio.Task[_TaskExecutionOutcome]],
+        running: dict[asyncio.Task[_TaskExecutionOutcome], tuple[str, TaskAttempt]],
     ) -> None:
         completed = sorted(
             (task_id, attempt, task)
@@ -493,17 +507,17 @@ class _DurableWorkflowRunner:
         failed_task_ids = set()
 
         for task_id, attempt, task in completed:
-            _, error = task.result()
-            if error is not None:
+            outcome = task.result()
+            if outcome.error is not None:
                 failed_task_ids.add(task_id)
                 retry_at = self._retry_time(task_id, attempt.attempt_number)
                 if retry_at is None:
-                    self._errors[task_id] = error
+                    self._errors[task_id] = outcome.error
                     self._run.fail_task(task_id)
                 else:
                     self._run.schedule_retry(task_id, retry_at)
                     record_task_retry()
-                error_type, _, error_message = error.partition(": ")
+                error_type, _, error_message = outcome.error.partition(": ")
                 await self._finish_attempt(
                     task_id,
                     attempt,
@@ -520,8 +534,8 @@ class _DurableWorkflowRunner:
         for task_id, attempt, task in completed:
             if task_id in failed_task_ids:
                 continue
-            task.result()
-            self._run.complete_task(task_id)
+            outcome = task.result()
+            self._run.complete_task(task_id, result=outcome.result)
             await self._finish_attempt(task_id, attempt, AttemptStatus.SUCCEEDED)
             duration = self._attempt_durations.pop(
                 (attempt.run_id, attempt.task_id, attempt.attempt_number),
@@ -557,19 +571,26 @@ class _DurableWorkflowRunner:
         self,
         task_id: str,
         attempt: TaskAttempt,
-    ) -> tuple[str, str | None]:
+    ) -> _TaskExecutionOutcome:
         attempt_timer = time.perf_counter()
         try:
-            await self._call_task(task_id, attempt)
+            result = await self._call_task(task_id, attempt)
+            result = normalize_task_result(result, self._max_result_bytes)
         except Exception as exc:  # noqa: BLE001
+            if isinstance(exc, TaskResultValidationError):
+                record_task_result_validation_failed()
             self._attempt_durations[
                 (attempt.run_id, attempt.task_id, attempt.attempt_number)
             ] = time.perf_counter() - attempt_timer
-            return task_id, f"{type(exc).__name__}: {exc}"
+            return _TaskExecutionOutcome(
+                task_id=task_id,
+                result=None,
+                error=f"{type(exc).__name__}: {exc}",
+            )
         self._attempt_durations[
             (attempt.run_id, attempt.task_id, attempt.attempt_number)
         ] = time.perf_counter() - attempt_timer
-        return task_id, None
+        return _TaskExecutionOutcome(task_id=task_id, result=result, error=None)
 
     def _retry_time(self, task_id: str, attempt_number: int) -> datetime | None:
         policy = self._tasks[task_id].retry_policy
@@ -611,7 +632,7 @@ class _DurableWorkflowRunner:
         await self._sleeper.sleep(delay)
         return True
 
-    async def _call_task(self, task_id: str, attempt: TaskAttempt) -> None:
+    async def _call_task(self, task_id: str, attempt: TaskAttempt) -> object:
         binding = self._registry.binding(task_id)
         arguments = ()
         if binding.accepts_context:
@@ -625,15 +646,16 @@ class _DurableWorkflowRunner:
                     attempt_key=attempt.attempt_key,
                     idempotency_key=task_run.idempotency_key
                     or f"{self._run.run_id}:{task_id}",
+                    dependency_results=self._run.direct_dependency_results(task_id),
                 ),
             )
 
         if binding.is_async:
-            await binding.implementation(*arguments)
-        else:
-            result = await asyncio.to_thread(binding.implementation, *arguments)
-            if inspect.isawaitable(result):
-                await result
+            return await binding.implementation(*arguments)
+        result = await asyncio.to_thread(binding.implementation, *arguments)
+        if inspect.isawaitable(result):
+            return await result
+        return result
 
     def _snapshot(self) -> WorkflowExecutionResult:
         return WorkflowExecutionResult(
