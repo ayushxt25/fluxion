@@ -69,11 +69,15 @@ class WorkflowRun:
         run_id: str,
         workflow: WorkflowDefinition,
         dag: WorkflowDAG | None = None,
+        workflow_input: JSONValue = None,
+        workflow_input_present: bool = False,
     ) -> None:
         self.run_id = run_id
         self.workflow_id = workflow.id
         self._dag = dag or WorkflowDAG(workflow)
         self._status = WorkflowStatus.PENDING
+        self.workflow_input = clone_json_value(workflow_input)
+        self.workflow_input_present = workflow_input_present
         self._task_runs = {
             task_id: TaskRun(
                 task_id=task_id,
@@ -91,8 +95,16 @@ class WorkflowRun:
         run_id: str,
         workflow: WorkflowDefinition,
         dag: WorkflowDAG | None = None,
+        workflow_input: JSONValue = None,
+        workflow_input_present: bool = False,
     ) -> "WorkflowRun":
-        return cls(run_id=run_id, workflow=workflow, dag=dag)
+        return cls(
+            run_id=run_id,
+            workflow=workflow,
+            dag=dag,
+            workflow_input=workflow_input,
+            workflow_input_present=workflow_input_present,
+        )
 
     @classmethod
     def restore(
@@ -105,6 +117,8 @@ class WorkflowRun:
         idempotency_keys: dict[str, str] | None = None,
         results: dict[str, JSONValue] | None = None,
         result_present: dict[str, bool] | None = None,
+        workflow_input: JSONValue = None,
+        workflow_input_present: bool = False,
         dag: WorkflowDAG | None = None,
     ) -> "WorkflowRun":
         workflow_dag = dag or WorkflowDAG(workflow)
@@ -117,7 +131,13 @@ class WorkflowRun:
                 f"invalid restored task state; missing={missing}, extra={extra}"
             )
 
-        workflow_run = cls(run_id=run_id, workflow=workflow, dag=workflow_dag)
+        workflow_run = cls(
+            run_id=run_id,
+            workflow=workflow,
+            dag=workflow_dag,
+            workflow_input=workflow_input,
+            workflow_input_present=workflow_input_present,
+        )
         workflow_run._status = status
         workflow_run._task_runs = {
             task_id: TaskRun(

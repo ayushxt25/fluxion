@@ -63,9 +63,10 @@ class WorkflowResumeService:
 
         workflow = await self._workflow_repository.get(workflow_id)
         workflow_run = await self._run_repository.get(run_id, workflow)
+        tasks_by_id = {task.id: task for task in workflow.tasks}
         for task_id, task_run in workflow_run.task_runs.items():
             if task_run.status != TaskStatus.SUCCEEDED:
-                registry.get(task_id)
+                registry.validate_task(tasks_by_id[task_id])
 
         return await _DurableWorkflowRunner(
             workflow=workflow,

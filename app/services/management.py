@@ -1,8 +1,10 @@
 import logging
 from uuid import uuid4
 
+from app.core.config import get_settings
 from app.engine.exceptions import UnknownTaskRunError, WorkflowRunNotResumableError
 from app.engine.execution import TaskAttempt, WorkflowRun
+from app.engine.results import JSONValue, normalize_workflow_input
 from app.engine.status import WorkflowStatus
 from app.observability.metrics import record_workflow_run_created
 from app.schemas.api import (
@@ -53,9 +55,22 @@ class WorkflowRunManagementService:
         self,
         workflow_id: str,
         run_id: str | None = None,
+        workflow_input: object = None,
+        workflow_input_present: bool = False,
     ) -> WorkflowRunResponse:
         workflow = await self._workflow_repository.get(workflow_id)
-        workflow_run = WorkflowRun.create(run_id or str(uuid4()), workflow)
+        normalized_input: JSONValue = None
+        if workflow_input_present:
+            normalized_input = normalize_workflow_input(
+                workflow_input,
+                get_settings().max_workflow_input_bytes,
+            )
+        workflow_run = WorkflowRun.create(
+            run_id or str(uuid4()),
+            workflow,
+            workflow_input=normalized_input,
+            workflow_input_present=workflow_input_present,
+        )
         await self._run_repository.create(workflow_run)
         record_workflow_run_created()
         return await self.get_run(workflow_run.run_id)
@@ -188,6 +203,12 @@ def _run_response(
         workflow_id=workflow_run.workflow_id,
         status=workflow_run.status.value,
         created_at=created_at,
+        input=(
+            workflow_run.workflow_input
+            if workflow_run.workflow_input_present
+            else None
+        ),
+        has_input=workflow_run.workflow_input_present,
         tasks=tasks,
     )
 

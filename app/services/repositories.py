@@ -110,6 +110,10 @@ class WorkflowRepository:
                         retry_max_backoff_seconds=(
                             task.retry_policy.max_backoff_seconds
                         ),
+                        parameters={
+                            name: parameter.model_dump(mode="json")
+                            for name, parameter in task.parameters.items()
+                        },
                     )
                     for task in workflow.tasks
                 ]
@@ -169,6 +173,7 @@ class WorkflowRepository:
                             backoff_multiplier=task.retry_backoff_multiplier,
                             max_backoff_seconds=task.retry_max_backoff_seconds,
                         ),
+                        parameters=task.parameters or {},
                     )
                     for task in sorted(record.tasks, key=lambda item: item.task_id)
                 ),
@@ -227,17 +232,21 @@ class WorkflowRepository:
                             depends_on=tuple(
                                 sorted(dependencies[(record.id, task.task_id)])
                             ),
-                            retry_policy=RetryPolicy(
-                                max_attempts=task.retry_max_attempts,
-                                initial_backoff_seconds=(
-                                    task.retry_initial_backoff_seconds
+                                retry_policy=RetryPolicy(
+                                    max_attempts=task.retry_max_attempts,
+                                    initial_backoff_seconds=(
+                                        task.retry_initial_backoff_seconds
+                                    ),
+                                    backoff_multiplier=task.retry_backoff_multiplier,
+                                    max_backoff_seconds=task.retry_max_backoff_seconds,
                                 ),
-                                backoff_multiplier=task.retry_backoff_multiplier,
-                                max_backoff_seconds=task.retry_max_backoff_seconds,
-                            ),
-                        )
-                        for task in sorted(record.tasks, key=lambda item: item.task_id)
-                    ),
+                                parameters=task.parameters or {},
+                            )
+                            for task in sorted(
+                                record.tasks,
+                                key=lambda item: item.task_id,
+                            )
+                        ),
                 )
             )
         return tuple(workflows)
@@ -257,6 +266,8 @@ class WorkflowRunRepository:
                     run_id=workflow_run.run_id,
                     workflow_id=workflow_run.workflow_id,
                     status=workflow_run.status.value,
+                    input=workflow_run.workflow_input,
+                    input_present=workflow_run.workflow_input_present,
                 )
                 self._session.add(record)
                 await self._session.flush()
@@ -331,6 +342,8 @@ class WorkflowRunRepository:
                     idempotency_keys=idempotency_keys,
                     results=results,
                     result_present=result_present,
+                    workflow_input=record.input,
+                    workflow_input_present=record.input_present,
                 )
             except UnknownTaskRunError as exc:
                 raise RecoveryStateError(
@@ -426,6 +439,8 @@ class WorkflowRunRepository:
                 raise WorkflowRunNotFoundError(workflow_run.run_id)
 
             record.status = workflow_run.status.value
+            record.input = workflow_run.workflow_input
+            record.input_present = workflow_run.workflow_input_present
             task_records = {task.task_id: task for task in record.task_runs}
             if set(task_records) != set(workflow_run.task_runs):
                 raise PersistenceError(
@@ -775,6 +790,8 @@ class DispatchOutboxRepository:
             raise WorkflowRunNotFoundError(workflow_run.run_id)
 
         record.status = workflow_run.status.value
+        record.input = workflow_run.workflow_input
+        record.input_present = workflow_run.workflow_input_present
         task_records = {task.task_id: task for task in record.task_runs}
         if set(task_records) != set(workflow_run.task_runs):
             raise PersistenceError(
@@ -1175,6 +1192,8 @@ class TaskAttemptRepository:
             raise WorkflowRunNotFoundError(workflow_run.run_id)
 
         record.status = workflow_run.status.value
+        record.input = workflow_run.workflow_input
+        record.input_present = workflow_run.workflow_input_present
         task_records = {task.task_id: task for task in record.task_runs}
         if set(task_records) != set(workflow_run.task_runs):
             raise PersistenceError(

@@ -24,6 +24,7 @@ class WorkflowListResponse(BaseModel):
 
 class CreateWorkflowRunRequest(BaseModel):
     run_id: str | None = None
+    input: Any = None
 
 
 class TaskRunResponse(BaseModel):
@@ -43,6 +44,8 @@ class WorkflowRunResponse(BaseModel):
     workflow_id: str
     status: str
     created_at: datetime
+    input: Any = None
+    has_input: bool = False
     tasks: tuple[TaskRunResponse, ...]
 
 

@@ -10,7 +10,12 @@ from app.runtime.demo import (
     UrlLibApiClient,
     run_demo,
 )
-from app.tasks.demo import DEMO_TASK_IDS, build_demo_tasks, unique_demo_ids
+from app.tasks.demo import (
+    DEMO_TASK_IDS,
+    build_demo_tasks,
+    build_demo_workflow,
+    unique_demo_ids,
+)
 from app.tasks.registry import build_task_registry
 
 
@@ -62,17 +67,10 @@ def test_context_aware_demo_tasks_work() -> None:
     )
     tasks = build_demo_tasks()
 
-    prepare_result = asyncio.run(tasks["demo.prepare"](prepare_context))
+    prepare_result = asyncio.run(tasks["demo.prepare"](prepare_context, seed=21))
     process_result = tasks["demo.process"](
-        TaskExecutionContext(
-            workflow_id="wf",
-            run_id="run",
-            task_id="demo.process",
-            attempt_number=1,
-            attempt_key="run:demo.process:1",
-            idempotency_key="run:demo.process",
-            dependency_results={"demo.prepare": prepare_result},
-        )
+        value=prepare_result["value"],
+        multiplier=2,
     )
     finalize_result = asyncio.run(
         tasks["demo.finalize"](
@@ -84,7 +82,8 @@ def test_context_aware_demo_tasks_work() -> None:
                 attempt_key="run:demo.finalize:1",
                 idempotency_key="run:demo.finalize",
                 dependency_results={"demo.process": process_result},
-            )
+            ),
+            processed=process_result["value"],
         )
     )
 
@@ -92,7 +91,6 @@ def test_context_aware_demo_tasks_work() -> None:
     assert process_result == {"task": "demo.process", "value": 42}
     assert finalize_result == {
         "task": "demo.finalize",
-        "prepared": 21,
         "processed": 42,
         "status": "complete",
     }
@@ -122,28 +120,15 @@ def test_demo_cli_builds_existing_api_requests_and_stops_on_success() -> None:
     assert client.calls[0] == (
         "POST",
         "/api/v1/workflows",
-        {
-            "id": "wf-demo",
-            "name": "Fluxion Demo Workflow",
-            "tasks": [
-                {"id": "demo.prepare", "name": "Prepare"},
-                {
-                    "id": "demo.process",
-                    "name": "Process",
-                    "depends_on": ["demo.prepare"],
-                },
-                {
-                    "id": "demo.finalize",
-                    "name": "Finalize",
-                    "depends_on": ["demo.process"],
-                },
-            ],
-        },
+        build_demo_workflow("wf-demo").model_dump(
+            mode="json",
+            exclude_defaults=True,
+        ),
     )
     assert client.calls[1] == (
         "POST",
         "/api/v1/workflows/wf-demo/runs",
-        {"run_id": "run-demo"},
+        {"run_id": "run-demo", "input": {"seed": 21, "multiplier": 2}},
     )
     assert client.calls[-1] == ("GET", "/api/v1/runs/run-demo", None)
     assert "Workflow: SUCCEEDED" in lines

@@ -9,8 +9,13 @@ from app.engine.context import TaskExecutionContext
 from app.engine.dag import WorkflowDAG
 from app.engine.exceptions import InvalidConcurrencyLimitError
 from app.engine.execution import WorkflowRun
+from app.engine.parameters import resolve_task_parameters
 from app.engine.registry import TaskCallable, TaskRegistry
-from app.engine.results import JSONValue, normalize_task_result
+from app.engine.results import (
+    JSONValue,
+    normalize_task_result,
+    normalize_workflow_input,
+)
 from app.engine.status import TaskStatus, WorkflowStatus
 from app.schemas.workflow import WorkflowDefinition
 
@@ -42,20 +47,38 @@ class WorkflowExecutor:
         run_id: str | None = None,
         max_concurrency: int | None = None,
         max_task_result_bytes: int = 262144,
+        workflow_input: object = None,
+        workflow_input_present: bool = False,
+        max_workflow_input_bytes: int = 262144,
     ) -> None:
         if max_concurrency is not None and max_concurrency <= 0:
             raise InvalidConcurrencyLimitError(max_concurrency)
         if max_task_result_bytes <= 0:
             raise ValueError("max_task_result_bytes must be positive.")
+        if max_workflow_input_bytes <= 0:
+            raise ValueError("max_workflow_input_bytes must be positive.")
 
         self._workflow = workflow
+        self._tasks = {task.id: task for task in workflow.tasks}
         self._dag = dag or WorkflowDAG(workflow)
         self._registry = (
             task_registry
             if isinstance(task_registry, TaskRegistry)
             else TaskRegistry(task_registry)
         )
-        self._run = WorkflowRun.create(run_id or str(uuid4()), workflow, self._dag)
+        normalized_input: JSONValue = None
+        if workflow_input_present:
+            normalized_input = normalize_workflow_input(
+                workflow_input,
+                max_workflow_input_bytes,
+            )
+        self._run = WorkflowRun.create(
+            run_id or str(uuid4()),
+            workflow,
+            self._dag,
+            workflow_input=normalized_input,
+            workflow_input_present=workflow_input_present,
+        )
         self._max_concurrency = max_concurrency
         self._max_task_result_bytes = max_task_result_bytes
         self._errors: dict[str, str] = {}
@@ -126,6 +149,7 @@ class WorkflowExecutor:
     async def _call_task(self, task_id: str) -> object:
         binding = self._registry.binding(task_id)
         arguments = ()
+        dependency_results = self._run.direct_dependency_results(task_id)
         if binding.accepts_context:
             arguments = (
                 TaskExecutionContext(
@@ -135,13 +159,25 @@ class WorkflowExecutor:
                     attempt_number=1,
                     attempt_key=f"{self._run.run_id}:{task_id}:1",
                     idempotency_key=f"{self._run.run_id}:{task_id}",
-                    dependency_results=self._run.direct_dependency_results(task_id),
+                    dependency_results=dependency_results,
+                    workflow_input=self._run.workflow_input,
+                    workflow_input_present=self._run.workflow_input_present,
                 ),
             )
+        keyword_arguments = resolve_task_parameters(
+            self._tasks[task_id],
+            workflow_input=self._run.workflow_input,
+            workflow_input_present=self._run.workflow_input_present,
+            dependency_results=dependency_results,
+        )
 
         if binding.is_async:
-            return await binding.implementation(*arguments)
-        result = await asyncio.to_thread(binding.implementation, *arguments)
+            return await binding.implementation(*arguments, **keyword_arguments)
+        result = await asyncio.to_thread(
+            binding.implementation,
+            *arguments,
+            **keyword_arguments,
+        )
         if inspect.isawaitable(result):
             return await result
         return result

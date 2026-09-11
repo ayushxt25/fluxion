@@ -36,6 +36,13 @@ class WorkflowRunRecord(Base):
         server_default=func.now(),
         nullable=False,
     )
+    input: Mapped[dict | list | str | int | float | bool | None] = mapped_column(JSONB)
+    input_present: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
 
     task_runs: Mapped[list["TaskRunRecord"]] = relationship(
         back_populates="workflow_run",

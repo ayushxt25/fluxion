@@ -111,23 +111,34 @@ def test_demo_distributed_e2e_happy_path() -> None:
         prepare_started = asyncio.Event()
         prepare_release = asyncio.Event()
 
-        async def prepare(context: TaskExecutionContext) -> dict[str, int]:
+        async def prepare(
+            context: TaskExecutionContext,
+            *,
+            seed: int,
+        ) -> dict[str, int]:
             calls.append("demo.prepare")
             contexts.append(context)
+            assert context.workflow_input == {"seed": 21, "multiplier": 2}
+            assert seed == 21
             prepare_started.set()
             await prepare_release.wait()
-            return {"value": 21}
+            return {"value": seed}
 
-        def process(context: TaskExecutionContext) -> dict[str, int]:
+        def process(*, value: int, multiplier: int) -> dict[str, int]:
             calls.append("demo.process")
-            assert context.dependency_results["demo.prepare"] == {"value": 21}
-            return {"value": 42}
+            assert value == 21
+            assert multiplier == 2
+            return {"value": value * multiplier}
 
-        async def finalize(context: TaskExecutionContext) -> dict[str, object]:
+        async def finalize(
+            context: TaskExecutionContext,
+            *,
+            processed: int,
+        ) -> dict[str, object]:
             calls.append("demo.finalize")
             contexts.append(context)
             assert context.dependency_results["demo.process"] == {"value": 42}
-            return {"status": "complete", "value": 42}
+            return {"status": "complete", "value": processed}
 
         registry = {
             "demo.prepare": prepare,
@@ -144,7 +155,12 @@ def test_demo_distributed_e2e_happy_path() -> None:
             async with session_factory() as session:
                 await WorkflowRepository(session).save(workflow)
                 await WorkflowRunRepository(session).create(
-                    WorkflowRun.create(run_id, workflow)
+                    WorkflowRun.create(
+                        run_id,
+                        workflow,
+                        workflow_input={"seed": 21, "multiplier": 2},
+                        workflow_input_present=True,
+                    )
                 )
 
             initial = await load_run(session_factory, run_id, workflow)

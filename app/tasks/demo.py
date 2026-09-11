@@ -2,12 +2,21 @@ from collections.abc import Callable
 from uuid import uuid4
 
 from app.engine.context import TaskExecutionContext
-from app.schemas.workflow import TaskDefinition, WorkflowDefinition
+from app.schemas.workflow import (
+    DependencyResultParameter,
+    TaskDefinition,
+    WorkflowDefinition,
+    WorkflowInputParameter,
+)
 
 DEMO_TASK_IDS = ("demo.prepare", "demo.process", "demo.finalize")
 
 
-async def demo_prepare(context: TaskExecutionContext) -> dict[str, int | str]:
+async def demo_prepare(
+    context: TaskExecutionContext,
+    *,
+    seed: int,
+) -> dict[str, int | str]:
     """Context-aware deterministic root task used by the smoke test."""
     _ = (
         context.workflow_id,
@@ -16,26 +25,23 @@ async def demo_prepare(context: TaskExecutionContext) -> dict[str, int | str]:
         context.attempt_key,
         context.idempotency_key,
     )
-    return {"task": context.task_id, "value": 21}
+    return {"task": context.task_id, "value": seed}
 
 
-def demo_process(context: TaskExecutionContext) -> dict[str, int | str]:
-    """Read the direct dependency result and return a derived value."""
-    prepare = context.dependency_results["demo.prepare"]
-    if not isinstance(prepare, dict) or prepare.get("value") != 21:
-        raise RuntimeError("demo.prepare result was not available.")
-    return {"task": context.task_id, "value": int(prepare["value"]) * 2}
+def demo_process(*, value: int, multiplier: int) -> dict[str, int | str]:
+    """Read mapped parameters and return a derived value."""
+    return {"task": "demo.process", "value": value * multiplier}
 
 
-async def demo_finalize(context: TaskExecutionContext) -> dict[str, object]:
+async def demo_finalize(
+    context: TaskExecutionContext,
+    *,
+    processed: int,
+) -> dict[str, object]:
     """Return a final deterministic summary from the process result."""
-    processed = context.dependency_results["demo.process"]
-    if not isinstance(processed, dict) or processed.get("value") != 42:
-        raise RuntimeError("demo.process result was not available.")
     return {
         "task": context.task_id,
-        "prepared": 21,
-        "processed": processed["value"],
+        "processed": processed,
         "status": "complete",
     }
 
@@ -53,16 +59,43 @@ def build_demo_workflow(workflow_id: str) -> WorkflowDefinition:
         id=workflow_id,
         name="Fluxion Demo Workflow",
         tasks=(
-            TaskDefinition(id="demo.prepare", name="Prepare"),
+            TaskDefinition(
+                id="demo.prepare",
+                name="Prepare",
+                parameters={
+                    "seed": WorkflowInputParameter(
+                        source="workflow_input",
+                        path=("seed",),
+                    ),
+                },
+            ),
             TaskDefinition(
                 id="demo.process",
                 name="Process",
                 depends_on=("demo.prepare",),
+                parameters={
+                    "value": DependencyResultParameter(
+                        source="dependency_result",
+                        task_id="demo.prepare",
+                        path=("value",),
+                    ),
+                    "multiplier": WorkflowInputParameter(
+                        source="workflow_input",
+                        path=("multiplier",),
+                    ),
+                },
             ),
             TaskDefinition(
                 id="demo.finalize",
                 name="Finalize",
                 depends_on=("demo.process",),
+                parameters={
+                    "processed": DependencyResultParameter(
+                        source="dependency_result",
+                        task_id="demo.process",
+                        path=("value",),
+                    ),
+                },
             ),
         ),
     )

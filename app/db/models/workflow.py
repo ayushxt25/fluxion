@@ -8,7 +8,9 @@ from sqlalchemy import (
     Integer,
     String,
     func,
+    text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -54,6 +56,12 @@ class TaskDefinitionRecord(Base):
         default=2.0,
     )
     retry_max_backoff_seconds: Mapped[float | None] = mapped_column(Float)
+    parameters: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
 
     workflow: Mapped[WorkflowDefinitionRecord] = relationship(back_populates="tasks")
 

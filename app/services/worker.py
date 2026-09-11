@@ -18,6 +18,7 @@ from app.engine.exceptions import (
     TaskResultValidationError,
 )
 from app.engine.execution import TaskAttempt, WorkflowRun
+from app.engine.parameters import resolve_task_parameters
 from app.engine.registry import TaskCallable, TaskRegistry
 from app.engine.results import JSONValue, normalize_task_result
 from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
@@ -110,7 +111,10 @@ class TaskWorker:
         workflow = await self._workflow_repository.get(message.workflow_id)
         workflow_run = await self._run_repository.get(message.run_id, workflow)
         attempt = await self._load_and_validate(message, workflow, workflow_run)
-        self._registry.binding(message.task_id)
+        workflow_task = next(
+            task for task in workflow.tasks if task.id == message.task_id
+        )
+        self._registry.validate_task(workflow_task)
 
         lease_token = str(uuid4())
         now = datetime.now(UTC)
@@ -143,6 +147,7 @@ class TaskWorker:
             result = await self._call_task_with_heartbeat(
                 message,
                 running_attempt,
+                workflow,
                 workflow_run,
             )
             result = normalize_task_result(result, self._max_result_bytes)
@@ -295,10 +300,11 @@ class TaskWorker:
         self,
         message: TaskDispatchMessage,
         attempt: TaskAttempt,
+        workflow: WorkflowDefinition,
         workflow_run: WorkflowRun,
     ) -> object:
         callable_task = asyncio.create_task(
-            self._call_task(message, attempt, workflow_run)
+            self._call_task(message, attempt, workflow, workflow_run)
         )
         heartbeat_task = asyncio.create_task(
             self._heartbeat_until_done(message, attempt, callable_task)
@@ -344,10 +350,12 @@ class TaskWorker:
         self,
         message: TaskDispatchMessage,
         attempt: TaskAttempt,
+        workflow: WorkflowDefinition,
         workflow_run: WorkflowRun,
     ) -> object:
         binding = self._registry.binding(message.task_id)
         arguments = ()
+        dependency_results = workflow_run.direct_dependency_results(message.task_id)
         if binding.accepts_context:
             arguments = (
                 TaskExecutionContext(
@@ -359,15 +367,25 @@ class TaskWorker:
                     idempotency_key=workflow_run.task_runs[
                         message.task_id
                     ].idempotency_key,
-                    dependency_results=workflow_run.direct_dependency_results(
-                        message.task_id
-                    ),
+                    dependency_results=dependency_results,
+                    workflow_input=workflow_run.workflow_input,
+                    workflow_input_present=workflow_run.workflow_input_present,
                 ),
             )
+        keyword_arguments = resolve_task_parameters(
+            next(task for task in workflow.tasks if task.id == message.task_id),
+            workflow_input=workflow_run.workflow_input,
+            workflow_input_present=workflow_run.workflow_input_present,
+            dependency_results=dependency_results,
+        )
 
         if binding.is_async:
-            return await binding.implementation(*arguments)
-        result = await asyncio.to_thread(binding.implementation, *arguments)
+            return await binding.implementation(*arguments, **keyword_arguments)
+        result = await asyncio.to_thread(
+            binding.implementation,
+            *arguments,
+            **keyword_arguments,
+        )
         if inspect.isawaitable(result):
             return await result
         return result

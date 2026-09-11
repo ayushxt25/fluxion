@@ -17,6 +17,7 @@ from app.engine.exceptions import (
     UnknownTaskRunError,
     WorkerLeaseError,
     WorkflowAlreadyExistsError,
+    WorkflowInputValidationError,
     WorkflowNotFoundError,
     WorkflowRunAlreadyExistsError,
     WorkflowRunNotFoundError,
@@ -50,6 +51,7 @@ def install_api_handlers(app: FastAPI) -> None:
     app.add_exception_handler(ExecutionStateError, conflict_handler)
     app.add_exception_handler(RecoveryStateError, conflict_handler)
     app.add_exception_handler(WorkflowValidationError, validation_handler)
+    app.add_exception_handler(WorkflowInputValidationError, validation_handler)
     app.add_exception_handler(TaskImplementationError, validation_handler)
     app.add_exception_handler(DispatchError, unavailable_handler)
     app.add_exception_handler(WorkerLeaseError, unavailable_handler)

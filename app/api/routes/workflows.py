@@ -121,7 +121,12 @@ async def create_run(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: Annotated[Principal, Depends(get_current_principal)],
 ) -> WorkflowRunResponse:
-    run = await _run_service(session).create_run(workflow_id, request.run_id)
+    run = await _run_service(session).create_run(
+        workflow_id,
+        request.run_id,
+        workflow_input=request.input,
+        workflow_input_present="input" in request.model_fields_set,
+    )
     response.headers["Location"] = f"/api/v1/runs/{run.run_id}"
     await AuditService(AuditEventRepository(session)).record_success(
         request_id=getattr(http_request.state, "request_id", ""),

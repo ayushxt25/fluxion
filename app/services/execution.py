@@ -19,8 +19,13 @@ from app.engine.exceptions import (
 )
 from app.engine.execution import TaskAttempt, WorkflowRun
 from app.engine.executor import WorkflowExecutionResult
+from app.engine.parameters import resolve_task_parameters
 from app.engine.registry import TaskCallable, TaskRegistry
-from app.engine.results import JSONValue, normalize_task_result
+from app.engine.results import (
+    JSONValue,
+    normalize_task_result,
+    normalize_workflow_input,
+)
 from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
 from app.observability.metrics import (
     record_task_attempt_failed,
@@ -361,6 +366,8 @@ class PersistentWorkflowExecutor:
         dag: WorkflowDAG | None = None,
         run_id: str | None = None,
         max_concurrency: int | None = None,
+        workflow_input: object = None,
+        workflow_input_present: bool = False,
     ) -> None:
         if max_concurrency is not None and max_concurrency <= 0:
             raise InvalidConcurrencyLimitError(max_concurrency)
@@ -379,7 +386,19 @@ class PersistentWorkflowExecutor:
             if hasattr(run_repository, "_session")
             else _InMemoryTaskAttemptRepository(run_repository)
         )
-        self._run = WorkflowRun.create(run_id or str(uuid4()), workflow, self._dag)
+        normalized_input: JSONValue = None
+        if workflow_input_present:
+            normalized_input = normalize_workflow_input(
+                workflow_input,
+                get_settings().max_workflow_input_bytes,
+            )
+        self._run = WorkflowRun.create(
+            run_id or str(uuid4()),
+            workflow,
+            self._dag,
+            workflow_input=normalized_input,
+            workflow_input_present=workflow_input_present,
+        )
         self._max_concurrency = max_concurrency
         self._max_result_bytes = get_settings().max_task_result_bytes
 
@@ -635,6 +654,7 @@ class _DurableWorkflowRunner:
     async def _call_task(self, task_id: str, attempt: TaskAttempt) -> object:
         binding = self._registry.binding(task_id)
         arguments = ()
+        dependency_results = self._run.direct_dependency_results(task_id)
         if binding.accepts_context:
             task_run = self._run.task_runs[task_id]
             arguments = (
@@ -646,13 +666,25 @@ class _DurableWorkflowRunner:
                     attempt_key=attempt.attempt_key,
                     idempotency_key=task_run.idempotency_key
                     or f"{self._run.run_id}:{task_id}",
-                    dependency_results=self._run.direct_dependency_results(task_id),
+                    dependency_results=dependency_results,
+                    workflow_input=self._run.workflow_input,
+                    workflow_input_present=self._run.workflow_input_present,
                 ),
             )
+        keyword_arguments = resolve_task_parameters(
+            self._tasks[task_id],
+            workflow_input=self._run.workflow_input,
+            workflow_input_present=self._run.workflow_input_present,
+            dependency_results=dependency_results,
+        )
 
         if binding.is_async:
-            return await binding.implementation(*arguments)
-        result = await asyncio.to_thread(binding.implementation, *arguments)
+            return await binding.implementation(*arguments, **keyword_arguments)
+        result = await asyncio.to_thread(
+            binding.implementation,
+            *arguments,
+            **keyword_arguments,
+        )
         if inspect.isawaitable(result):
             return await result
         return result

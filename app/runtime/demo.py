@@ -94,7 +94,7 @@ def run_demo(
     client.request_json(
         "POST",
         f"/api/v1/workflows/{workflow_id}/runs",
-        {"run_id": run_id},
+        {"run_id": run_id, "input": {"seed": 21, "multiplier": 2}},
     )
     output(f"Created run: {run_id}")
 

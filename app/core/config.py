@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     demo_timeout_seconds: float = 30
     demo_poll_seconds: float = 1.0
     max_task_result_bytes: int = 262144
+    max_workflow_input_bytes: int = 262144
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -104,6 +105,8 @@ class Settings(BaseSettings):
             raise ValueError("DEMO_POLL_SECONDS must be positive.")
         if self.max_task_result_bytes <= 0:
             raise ValueError("MAX_TASK_RESULT_BYTES must be positive.")
+        if self.max_workflow_input_bytes <= 0:
+            raise ValueError("MAX_WORKFLOW_INPUT_BYTES must be positive.")
         return self
 
 

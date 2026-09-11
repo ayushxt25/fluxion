@@ -9,7 +9,7 @@ from app.engine.exceptions import (
     InvalidTaskCallableError,
     MissingTaskImplementationError,
 )
-from app.schemas.workflow import WorkflowDefinition
+from app.schemas.workflow import TaskDefinition, WorkflowDefinition
 
 TaskCallable = Callable[..., Any]
 
@@ -19,6 +19,7 @@ class TaskCallableBinding:
     implementation: TaskCallable
     accepts_context: bool
     is_async: bool
+    keyword_parameters: frozenset[str]
 
 
 class TaskRegistry:
@@ -52,7 +53,20 @@ class TaskRegistry:
         for task in workflow.tasks:
             if task.id not in self._implementations:
                 raise MissingTaskImplementationError(task.id)
-            self.binding(task.id)
+            self.validate_task(task)
+
+    def validate_task(self, task: TaskDefinition) -> None:
+        if task.id not in self._implementations:
+            raise MissingTaskImplementationError(task.id)
+        binding = self.binding(task.id)
+        configured = set(task.parameters)
+        expected = set(binding.keyword_parameters)
+        if configured != expected:
+            raise InvalidTaskCallableError(
+                task.id,
+                "configured parameters must match callable keyword-only "
+                "parameters.",
+            )
 
     def _bind(
         self,
@@ -70,45 +84,49 @@ class TaskRegistry:
         parameters = tuple(signature.parameters.values())
         if any(
             parameter.kind
-            in {
-                inspect.Parameter.VAR_POSITIONAL,
-                inspect.Parameter.VAR_KEYWORD,
-                inspect.Parameter.KEYWORD_ONLY,
-            }
+            in {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}
             for parameter in parameters
         ):
             raise InvalidTaskCallableError(
                 task_id,
-                "expected either no parameters or exactly one context parameter.",
+                "varargs and varkwargs are not supported.",
             )
 
-        try:
-            signature.bind()
-        except TypeError:
-            can_bind_zero_args = False
-        else:
-            can_bind_zero_args = True
-
-        if can_bind_zero_args:
-            accepts_context = False
-        elif (
-            len(parameters) == 1
-            and parameters[0].default is inspect.Parameter.empty
-            and parameters[0].kind
+        positional = tuple(
+            parameter
+            for parameter in parameters
+            if parameter.kind
             in {
                 inspect.Parameter.POSITIONAL_ONLY,
                 inspect.Parameter.POSITIONAL_OR_KEYWORD,
             }
+        )
+        keyword_only = tuple(
+            parameter
+            for parameter in parameters
+            if parameter.kind == inspect.Parameter.KEYWORD_ONLY
+        )
+
+        if len(positional) == 0:
+            accepts_context = False
+        elif (
+            len(positional) == 1
+            and positional[0].default is inspect.Parameter.empty
         ):
             accepts_context = True
         else:
-            raise InvalidTaskCallableError(
-                task_id,
-                "expected either no parameters or exactly one context parameter.",
-            )
+            try:
+                signature.bind()
+            except TypeError as exc:
+                raise InvalidTaskCallableError(
+                    task_id,
+                    "expected zero-argument execution or one context parameter.",
+                ) from exc
+            accepts_context = False
 
         return TaskCallableBinding(
             implementation=implementation,
             accepts_context=accepts_context,
             is_async=inspect.iscoroutinefunction(implementation),
+            keyword_parameters=frozenset(parameter.name for parameter in keyword_only),
         )

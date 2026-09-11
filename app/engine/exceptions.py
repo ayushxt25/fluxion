@@ -71,6 +71,19 @@ class TaskResultValidationError(ExecutionStateError):
         super().__init__(f"Task result is invalid: {reason}")
 
 
+class WorkflowInputValidationError(ExecutionStateError):
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"Workflow input is invalid: {reason}")
+
+
+class TaskParameterResolutionError(ExecutionStateError):
+    def __init__(self, task_id: str, parameter_name: str, reason: str) -> None:
+        super().__init__(
+            f"Task '{task_id}' parameter '{parameter_name}' could not be resolved: "
+            f"{reason}"
+        )
+
+
 class TaskImplementationError(Exception):
     """Base exception for task implementation registry errors."""
 

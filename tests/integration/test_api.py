@@ -216,6 +216,53 @@ async def test_invalid_dag_returns_422() -> None:
         assert response.json()["error"]["code"]
 
 
+async def test_workflow_parameters_and_run_input_round_trip() -> None:
+    async with api_client() as (client, _):
+        payload = {
+            "id": "wf-input-api",
+            "name": "Input API Workflow",
+            "tasks": [
+                {
+                    "id": "a",
+                    "parameters": {
+                        "seed": {
+                            "source": "workflow_input",
+                            "path": ["seed"],
+                        }
+                    },
+                }
+            ],
+        }
+
+        created = await client.post(
+            "/api/v1/workflows",
+            json=payload,
+            headers=auth_headers(Role.OPERATOR),
+        )
+        run = await client.post(
+            "/api/v1/workflows/wf-input-api/runs",
+            json={"run_id": "run-input-api", "input": {"seed": 21}},
+            headers=auth_headers(Role.OPERATOR),
+        )
+        fetched = await client.get(
+            "/api/v1/workflows/wf-input-api",
+            headers=auth_headers(Role.VIEWER),
+        )
+        inspected = await client.get(
+            "/api/v1/runs/run-input-api",
+            headers=auth_headers(Role.VIEWER),
+        )
+
+        assert created.status_code == 201
+        assert run.status_code == 201
+        assert fetched.json()["tasks"][0]["parameters"]["seed"] == {
+            "source": "workflow_input",
+            "path": ["seed"],
+        }
+        assert inspected.json()["input"] == {"seed": 21}
+        assert inspected.json()["has_input"] is True
+
+
 async def test_run_create_inspect_tasks_attempts_and_cancel() -> None:
     async with api_client() as (client, _):
         response = await client.post(

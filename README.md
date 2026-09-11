@@ -32,6 +32,8 @@ path through scheduler, transactional outbox, Redis, worker leasing, task
 execution, downstream unlock, and durable workflow success.
 Phase 20 adds durable JSON task results and direct dependency data passing
 through `TaskExecutionContext.dependency_results`.
+Phase 21 adds durable workflow run input and typed task parameter mappings from
+workflow input, direct dependency results, and literal JSON values.
 
 ## Planned Capabilities
 
@@ -158,9 +160,11 @@ scheduler dispatch intent, outbox publication, Redis transport, worker claim,
 lease/heartbeat infrastructure, task execution, dependency result passing,
 dependent unlock, and durable workflow completion. The built-in demo tasks are
 deterministic verification tasks for local smoke testing, not production
-business logic. `demo.prepare` returns `{"value": 21}`, `demo.process` reads
-that direct dependency result and returns `{"value": 42}`, and `demo.finalize`
-returns a final summary.
+business logic. The demo run supplies workflow input `{"seed": 21,
+"multiplier": 2}`. `demo.prepare` receives `seed` as a mapped parameter and
+returns `{"value": 21}`, `demo.process` receives that dependency result plus
+`multiplier` and returns `{"value": 42}`, and `demo.finalize` returns a final
+summary.
 
 ## Task Results
 
@@ -185,6 +189,22 @@ Task inspection API responses include `result` and `has_result`.
 
 Fluxion does not yet provide artifact storage, blob storage, result streaming,
 schema registries, cross-workflow data sharing, or secret/result templating.
+
+## Workflow Inputs And Parameters
+
+Workflow runs may be created with optional JSON input. Fluxion persists the
+normalized input on the workflow run and distinguishes missing input from an
+explicit JSON null using `has_input`. `MAX_WORKFLOW_INPUT_BYTES` limits the
+UTF-8 encoded JSON input size and defaults to 262144 bytes. The input is
+immutable for the lifetime of the run and is exposed to context-aware tasks as
+`TaskExecutionContext.workflow_input` plus `workflow_input_present`.
+
+Task definitions may declare parameter mappings from `workflow_input`,
+`dependency_result`, or `literal` sources. Paths are small JSON paths expressed
+as lists of object keys and array indexes; an empty path selects the whole
+source value. Dependency-result parameters may reference direct dependencies
+only. Fluxion does not include an expression language, JSONPath/JMESPath,
+templating, environment interpolation, or dynamic code execution.
 
 ## Docker Compose
 
