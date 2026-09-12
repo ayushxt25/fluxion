@@ -2,6 +2,7 @@ import asyncio
 
 from app.runtime.bootstrap import (
     install_shutdown_handlers,
+    parse_runtime_arguments,
     run_async,
     runtime_resources,
 )
@@ -36,4 +37,5 @@ async def run(stop_event: asyncio.Event | None = None) -> None:
 
 
 def main() -> None:
+    parse_runtime_arguments("fluxion-scheduler", "Run the Fluxion scheduler service.")
     run_async(run)

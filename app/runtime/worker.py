@@ -12,6 +12,7 @@ from app.observability.metrics import (
 )
 from app.runtime.bootstrap import (
     install_shutdown_handlers,
+    parse_runtime_arguments,
     run_async,
     runtime_resources,
 )
@@ -151,4 +152,5 @@ async def run_worker_loop(
 
 
 def main() -> None:
+    parse_runtime_arguments("fluxion-worker", "Run the Fluxion worker service.")
     run_async(run)

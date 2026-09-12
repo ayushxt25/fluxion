@@ -1,5 +1,8 @@
 # Fluxion
 
+[![CI](https://github.com/ayushxt25/fluxion/actions/workflows/ci.yml/badge.svg)](https://github.com/ayushxt25/fluxion/actions/workflows/ci.yml)
+Python 3.11+
+
 Fluxion is a Python backend project that will grow into a distributed workflow
 execution engine for DAG-based workflows.
 
@@ -288,12 +291,48 @@ curl -X POST http://127.0.0.1:8000/api/v1/workflows \
 The generated OpenAPI documentation is available from FastAPI at `/docs` and
 `/openapi.json`.
 
-## Tests And Linting
+## Validation And Releases
 
 ```bash
-python -m pytest
-ruff check .
+python scripts/check.py lint
+python scripts/check.py unit
+python scripts/check.py integration
+python scripts/check.py chaos
+python scripts/check.py stress
 ```
+
+`requirements-ci.txt` pins the dependency set used by CI and container builds;
+the project dependency ranges in `pyproject.toml` remain the development
+contract. Regenerate the file in a clean Python 3.11 environment with:
+
+```bash
+python -m pip freeze > requirements-ci.txt
+```
+
+Review the resulting changes before committing. Build a release artifact with:
+
+```bash
+python -m pip install -e ".[dev]" hatchling
+python -m build --no-isolation
+```
+
+The wheel is then installed into a clean environment in CI, where its console
+scripts (including `fluxion`, `fluxion-api`, `fluxion-worker`, and
+`fluxion-demo`) are checked. `fluxion --version` reads from the single package
+version source at `app/version.py`. The full release procedure lives in
+[`docs/RELEASE.md`](docs/RELEASE.md).
+
+GitHub Actions separates static checks, package installation, unit tests,
+PostgreSQL/Redis integration tests, deterministic chaos tests, migration
+round-trips, and Docker validation. Stress tests run in the separate scheduled
+or manually triggered workflow rather than on every pull request.
+
+For a local Compose smoke test, set a non-production `JWT_SECRET`, start the
+stack, wait for `/ready`, then run `fluxion-demo` against the published API
+port. CI performs the same bounded readiness check with `scripts/ci_smoke.py`.
+Set `API_HOST_PORT` or `REDIS_HOST_PORT` when the default host ports (`8001`
+and `6379`) are already in use; container-to-container service addresses do
+not change.
 
 ## Chaos And Stress Validation
 

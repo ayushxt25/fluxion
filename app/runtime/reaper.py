@@ -2,6 +2,7 @@ import asyncio
 
 from app.runtime.bootstrap import (
     install_shutdown_handlers,
+    parse_runtime_arguments,
     run_async,
     runtime_resources,
 )
@@ -32,4 +33,5 @@ async def run(stop_event: asyncio.Event | None = None) -> None:
 
 
 def main() -> None:
+    parse_runtime_arguments("fluxion-reaper", "Run the Fluxion lease reaper service.")
     run_async(run)

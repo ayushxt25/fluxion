@@ -1,7 +1,8 @@
-from app.runtime.bootstrap import configure_runtime
+from app.runtime.bootstrap import configure_runtime, parse_runtime_arguments
 
 
 def main() -> None:
+    parse_runtime_arguments("fluxion-api", "Run the Fluxion API service.")
     settings = configure_runtime()
     import uvicorn
 

@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import signal
 from collections.abc import AsyncIterator, Callable
@@ -78,3 +79,9 @@ def _signal_handler(stop_event: asyncio.Event) -> Callable[[int, object], None]:
 def run_async(entrypoint: Callable[[], object]) -> None:
     configure_runtime()
     asyncio.run(entrypoint())
+
+
+def parse_runtime_arguments(program: str, description: str) -> None:
+    """Provide consistent help without initializing runtime resources."""
+    parser = argparse.ArgumentParser(prog=program, description=description)
+    parser.parse_args()
