@@ -16,6 +16,8 @@ from app.sdk.errors import (
 from app.sdk.models import (
     DependencyResultParameter,
     Retry,
+    RunEvent,
+    RunEventList,
     TaskAttempt,
     TaskDefinition,
     TaskRun,
@@ -39,6 +41,8 @@ __all__ = [
     "PermissionDeniedError",
     "RateLimitError",
     "Retry",
+    "RunEvent",
+    "RunEventList",
     "ServiceUnavailableError",
     "TaskAttempt",
     "TaskDefinition",

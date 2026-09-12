@@ -1,4 +1,5 @@
 import time
+from collections.abc import Iterator
 from typing import Any, TypeVar
 
 import httpx
@@ -20,6 +21,8 @@ from app.sdk.models import (
     OutboxPublishResult,
     Readiness,
     RecoveryResult,
+    RunEvent,
+    RunEventList,
     SchedulerTickResult,
     TaskAttemptList,
     TaskRun,
@@ -182,6 +185,28 @@ class FluxionClient:
             "GET", f"/api/v1/runs/{run_id}/tasks/{task_id}/attempts", TaskAttemptList
         )
 
+    def list_run_events(
+        self, run_id: str, *, after: int | None = None, limit: int = 100
+    ) -> RunEventList:
+        return self._model(
+            "GET", f"/api/v1/runs/{run_id}/events/history", RunEventList,
+            params={"after": after, "limit": limit},
+        )
+
+    def watch_run(
+        self, run_id: str, *, after: int | None = None, timeout: float | None = None
+    ) -> Iterator[RunEvent]:
+        headers = {"Last-Event-ID": str(after)} if after is not None else {}
+        try:
+            with self._client.stream(
+                "GET", f"/api/v1/runs/{run_id}/events", headers=headers,
+                timeout=timeout or self.timeout,
+            ) as response:
+                raise_for_response(response)
+                yield from _parse_sse(response.iter_lines())
+        except httpx.HTTPError as exc:
+            raise map_http_error(exc) from exc
+
     def cancel_run(self, run_id: str) -> WorkflowRun:
         return self._model("POST", f"/api/v1/runs/{run_id}/cancel", WorkflowRun)
 
@@ -241,3 +266,20 @@ class FluxionClient:
             raise map_http_error(exc) from exc
         raise_for_response(response)
         return parse_json(response)
+
+
+def _parse_sse(lines: Iterator[str]) -> Iterator[RunEvent]:
+    data: list[str] = []
+    for line in lines:
+        if not line:
+            if data:
+                try:
+                    yield RunEvent.model_validate_json("\n".join(data))
+                except PydanticValidationError as exc:
+                    raise FluxionAPIError(
+                        "Fluxion SSE stream contained an invalid event."
+                    ) from exc
+                data.clear()
+            continue
+        if line.startswith("data:"):
+            data.append(line[5:].lstrip())

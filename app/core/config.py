@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     demo_poll_seconds: float = 1.0
     max_task_result_bytes: int = 262144
     max_workflow_input_bytes: int = 262144
+    sse_poll_interval_seconds: float = 0.5
+    sse_heartbeat_seconds: float = 15
+    sse_event_batch_size: int = 100
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -127,6 +130,12 @@ class Settings(BaseSettings):
             raise ValueError("MAX_TASK_RESULT_BYTES must be positive.")
         if self.max_workflow_input_bytes <= 0:
             raise ValueError("MAX_WORKFLOW_INPUT_BYTES must be positive.")
+        if self.sse_poll_interval_seconds <= 0:
+            raise ValueError("SSE_POLL_INTERVAL_SECONDS must be positive.")
+        if self.sse_heartbeat_seconds <= 0:
+            raise ValueError("SSE_HEARTBEAT_SECONDS must be positive.")
+        if self.sse_event_batch_size < 1:
+            raise ValueError("SSE_EVENT_BATCH_SIZE must be at least 1.")
         return self
 
 

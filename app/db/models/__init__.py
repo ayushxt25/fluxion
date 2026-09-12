@@ -1,4 +1,5 @@
 from app.db.models.audit import AuditEventRecord
+from app.db.models.events import RunEventRecord
 from app.db.models.execution import (
     DispatchOutboxRecord,
     TaskAttemptRecord,
@@ -13,6 +14,7 @@ from app.db.models.workflow import (
 
 __all__ = [
     "AuditEventRecord",
+    "RunEventRecord",
     "TaskDefinitionRecord",
     "TaskDependencyRecord",
     "DispatchOutboxRecord",

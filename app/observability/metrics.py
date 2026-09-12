@@ -220,6 +220,20 @@ def record_rate_limit_denied() -> None:
     registry.inc_counter("fluxion_rate_limit_denied_total")
 
 
+def record_sse_opened() -> None:
+    registry.inc_counter("fluxion_sse_connections_opened_total")
+    registry.inc_gauge("fluxion_sse_active_connections", amount=1)
+
+
+def record_sse_closed() -> None:
+    registry.inc_counter("fluxion_sse_disconnects_total")
+    registry.inc_gauge("fluxion_sse_active_connections", amount=-1)
+
+
+def record_sse_event() -> None:
+    registry.inc_counter("fluxion_sse_events_streamed_total")
+
+
 def _labels(labels: dict[str, str] | None) -> tuple[tuple[str, str], ...]:
     return tuple(sorted((labels or {}).items()))
 

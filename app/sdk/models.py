@@ -135,6 +135,24 @@ class TaskAttemptList(SDKModel):
     count: int
 
 
+class RunEvent(SDKModel):
+    id: int
+    version: int
+    event_type: str
+    workflow_id: str
+    run_id: str
+    task_id: str | None = None
+    attempt_number: int | None = None
+    created_at: datetime
+    payload: dict[str, Any] | None = None
+
+
+class RunEventList(SDKModel):
+    items: tuple[RunEvent, ...]
+    limit: int
+    count: int
+
+
 class RecoveryResult(SDKModel):
     run_id: str
     workflow_id: str

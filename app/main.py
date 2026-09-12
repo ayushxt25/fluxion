@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 from app.api.errors import install_api_handlers
 from app.api.middleware import body_size_middleware, security_headers_middleware
+from app.api.routes.events import router as events_router
 from app.api.routes.health import router as health_router
 from app.api.routes.observability import router as observability_router
 from app.api.routes.operations import router as operations_router
@@ -49,6 +50,7 @@ def create_app() -> FastAPI:
     app.include_router(observability_router)
     app.include_router(workflows_router, prefix="/api/v1")
     app.include_router(runs_router, prefix="/api/v1")
+    app.include_router(events_router, prefix="/api/v1")
     app.include_router(operations_router, prefix="/api/v1")
     return app
 

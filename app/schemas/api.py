@@ -82,6 +82,24 @@ class TaskAttemptListResponse(BaseModel):
     count: int
 
 
+class RunEventResponse(BaseModel):
+    id: int
+    version: int
+    event_type: str
+    workflow_id: str
+    run_id: str
+    task_id: str | None = None
+    attempt_number: int | None = None
+    created_at: datetime
+    payload: dict | None = None
+
+
+class RunEventListResponse(BaseModel):
+    items: tuple[RunEventResponse, ...]
+    limit: int
+    count: int
+
+
 class RecoveryResponse(BaseModel):
     run_id: str
     workflow_id: str

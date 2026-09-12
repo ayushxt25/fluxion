@@ -77,6 +77,16 @@ distinct. The SDK returns typed Pydantic models and raises typed API errors,
 including `RateLimitError.retry_after`; it never automatically retries
 mutations. See `examples/basic_workflow.py` and `examples/async_workflow.py`.
 
+## Run Events (SSE)
+
+New runs persist compact, ordered state-change events in PostgreSQL. Watch them
+through `GET /api/v1/runs/{run_id}/events` or `client.watch_run(run_id)`; a
+stream replays events after `Last-Event-ID` (or `after`), sends comment
+heartbeats, and closes after a terminal run event. The history endpoint is
+`GET /api/v1/runs/{run_id}/events/history`. Events omit inputs, full results,
+lease tokens, credentials, and tracebacks. Runs created before this feature
+simply have no historic events; retention is intentionally not implemented.
+
 ## Planned Capabilities
 
 - Workflow definitions and DAG validation

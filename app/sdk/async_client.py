@@ -1,5 +1,6 @@
 import asyncio
 import time
+from collections.abc import AsyncIterator
 from typing import Any, TypeVar
 
 import httpx
@@ -22,6 +23,8 @@ from app.sdk.models import (
     OutboxPublishResult,
     Readiness,
     RecoveryResult,
+    RunEvent,
+    RunEventList,
     SchedulerTickResult,
     TaskAttemptList,
     TaskRun,
@@ -186,6 +189,41 @@ class AsyncFluxionClient:
         return await self._model(
             "GET", f"/api/v1/runs/{run_id}/tasks/{task_id}/attempts", TaskAttemptList
         )
+
+    async def list_run_events(
+        self, run_id: str, *, after: int | None = None, limit: int = 100
+    ) -> RunEventList:
+        return await self._model(
+            "GET", f"/api/v1/runs/{run_id}/events/history", RunEventList,
+            params={"after": after, "limit": limit},
+        )
+
+    async def watch_run(
+        self, run_id: str, *, after: int | None = None, timeout: float | None = None
+    ) -> AsyncIterator[RunEvent]:
+        headers = {"Last-Event-ID": str(after)} if after is not None else {}
+        try:
+            async with self._client.stream(
+                "GET", f"/api/v1/runs/{run_id}/events", headers=headers,
+                timeout=timeout or self.timeout,
+            ) as response:
+                raise_for_response(response)
+                data: list[str] = []
+                async for line in response.aiter_lines():
+                    if not line:
+                        if data:
+                            try:
+                                yield RunEvent.model_validate_json("\n".join(data))
+                            except PydanticValidationError as exc:
+                                raise FluxionAPIError(
+                                    "Fluxion SSE stream contained an invalid event."
+                                ) from exc
+                            data.clear()
+                        continue
+                    if line.startswith("data:"):
+                        data.append(line[5:].lstrip())
+        except httpx.HTTPError as exc:
+            raise map_http_error(exc) from exc
 
     async def cancel_run(self, run_id: str) -> WorkflowRun:
         return await self._model("POST", f"/api/v1/runs/{run_id}/cancel", WorkflowRun)

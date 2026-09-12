@@ -35,6 +35,7 @@ from app.engine.exceptions import (
 from app.engine.execution import TaskAttempt, WorkflowRun
 from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
 from app.schemas.workflow import RetryPolicy, TaskDefinition, WorkflowDefinition
+from app.services.events import RunEventRepository
 
 
 @dataclass(frozen=True)
@@ -288,6 +289,22 @@ class WorkflowRunRepository:
                         for task_id, task_run in workflow_run.task_runs.items()
                     ]
                 )
+                events = RunEventRepository(self._session)
+                events.record(
+                    run_id=workflow_run.run_id,
+                    workflow_id=workflow_run.workflow_id,
+                    event_type="run.created",
+                    payload={"status": workflow_run.status.value},
+                )
+                for task_id, task_run in workflow_run.task_runs.items():
+                    if task_run.status == TaskStatus.READY:
+                        events.record(
+                            run_id=workflow_run.run_id,
+                            workflow_id=workflow_run.workflow_id,
+                            event_type="task.ready",
+                            task_id=task_id,
+                            payload={"status": task_run.status.value},
+                        )
         except IntegrityError as exc:
             raise PersistenceError(
                 f"Failed to persist workflow run '{workflow_run.run_id}'."
@@ -438,6 +455,7 @@ class WorkflowRunRepository:
             if record is None:
                 raise WorkflowRunNotFoundError(workflow_run.run_id)
 
+            _record_state_events(self._session, record, record.task_runs, workflow_run)
             record.status = workflow_run.status.value
             record.input = workflow_run.workflow_input
             record.input_present = workflow_run.workflow_input_present
@@ -789,6 +807,7 @@ class DispatchOutboxRepository:
         if record is None:
             raise WorkflowRunNotFoundError(workflow_run.run_id)
 
+        _record_state_events(self._session, record, record.task_runs, workflow_run)
         record.status = workflow_run.status.value
         record.input = workflow_run.workflow_input
         record.input_present = workflow_run.workflow_input_present
@@ -807,6 +826,60 @@ class DispatchOutboxRepository:
             )
             task_records[task_id].result = task_run.result
             task_records[task_id].result_present = task_run.result_present
+
+
+def _record_state_events(
+    session: AsyncSession,
+    record: WorkflowRunRecord,
+    task_records: list[TaskRunRecord],
+    workflow_run: WorkflowRun,
+) -> None:
+    """Append only canonical state changes to the current transaction."""
+    events = RunEventRepository(session)
+    if record.status != workflow_run.status.value:
+        event_type = _RUN_EVENT_TYPES.get(workflow_run.status)
+        if event_type:
+            events.record(
+                run_id=workflow_run.run_id,
+                workflow_id=workflow_run.workflow_id,
+                event_type=event_type,
+                payload={"status": workflow_run.status.value},
+            )
+    persisted = {item.task_id: item for item in task_records}
+    for task_id, task_run in workflow_run.task_runs.items():
+        previous = persisted.get(task_id)
+        if previous is None or previous.status == task_run.status.value:
+            continue
+        event_type = _TASK_EVENT_TYPES.get(task_run.status)
+        if event_type:
+            events.record(
+                run_id=workflow_run.run_id,
+                workflow_id=workflow_run.workflow_id,
+                event_type=event_type,
+                task_id=task_id,
+                payload={
+                    "status": task_run.status.value,
+                    "has_result": task_run.result_present,
+                },
+            )
+
+
+_TASK_EVENT_TYPES = {
+    TaskStatus.READY: "task.ready",
+    TaskStatus.DISPATCHED: "task.dispatched",
+    TaskStatus.RUNNING: "task.running",
+    TaskStatus.RETRY_WAITING: "task.retry_waiting",
+    TaskStatus.SUCCEEDED: "task.succeeded",
+    TaskStatus.FAILED: "task.failed",
+    TaskStatus.INTERRUPTED: "task.interrupted",
+    TaskStatus.CANCELLED: "task.cancelled",
+}
+_RUN_EVENT_TYPES = {
+    WorkflowStatus.RUNNING: "run.started",
+    WorkflowStatus.SUCCEEDED: "run.succeeded",
+    WorkflowStatus.FAILED: "run.failed",
+    WorkflowStatus.CANCELLED: "run.cancelled",
+}
 
 
 class TaskAttemptRepository:
@@ -929,6 +1002,14 @@ class TaskAttemptRepository:
             record.lease_token = lease_token
             record.last_heartbeat_at = now
             record.lease_expires_at = _add_seconds(now, lease_seconds)
+            RunEventRepository(self._session).record(
+                run_id=attempt.run_id,
+                workflow_id=attempt.workflow_id,
+                event_type="attempt.started",
+                task_id=attempt.task_id,
+                attempt_number=attempt.attempt_number,
+                payload={"status": AttemptStatus.RUNNING.value},
+            )
         return TaskAttempt(
             run_id=attempt.run_id,
             workflow_id=attempt.workflow_id,
@@ -1015,6 +1096,18 @@ class TaskAttemptRepository:
             record.lease_token = None
             record.lease_expires_at = None
             record.last_heartbeat_at = None
+            RunEventRepository(self._session).record(
+                run_id=attempt.run_id,
+                workflow_id=attempt.workflow_id,
+                event_type=(
+                    "attempt.succeeded"
+                    if status == AttemptStatus.SUCCEEDED
+                    else "attempt.failed"
+                ),
+                task_id=attempt.task_id,
+                attempt_number=attempt.attempt_number,
+                payload={"status": status.value},
+            )
 
     async def list_expired_running_attempts(
         self,
@@ -1075,6 +1168,14 @@ class TaskAttemptRepository:
             record.lease_token = None
             record.lease_expires_at = None
             record.last_heartbeat_at = None
+            RunEventRepository(self._session).record(
+                run_id=attempt_ref.run_id,
+                workflow_id=attempt_ref.workflow_id,
+                event_type="attempt.interrupted",
+                task_id=attempt_ref.task_id,
+                attempt_number=attempt_ref.attempt_number,
+                payload={"status": AttemptStatus.INTERRUPTED.value},
+            )
         return True
 
     async def finish_attempt(
@@ -1191,6 +1292,7 @@ class TaskAttemptRepository:
         if record is None:
             raise WorkflowRunNotFoundError(workflow_run.run_id)
 
+        _record_state_events(self._session, record, record.task_runs, workflow_run)
         record.status = workflow_run.status.value
         record.input = workflow_run.workflow_input
         record.input_present = workflow_run.workflow_input_present
