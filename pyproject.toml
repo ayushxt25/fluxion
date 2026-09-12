@@ -43,6 +43,8 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
     "integration: tests requiring external services such as PostgreSQL",
+    "chaos: deterministic failure-injection validation",
+    "stress: higher-volume validation excluded from normal fast feedback",
 ]
 
 [tool.ruff]

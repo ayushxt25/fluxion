@@ -295,6 +295,27 @@ python -m pytest
 ruff check .
 ```
 
+## Chaos And Stress Validation
+
+Fluxion treats Redis delivery as at-least-once transport. PostgreSQL task state,
+claims, lease tokens, fencing, and idempotency preserve canonical execution when
+Redis delivery duplicates or an outbox publisher crashes after publication but
+before it records `published_at`. This is not an exactly-once guarantee for
+external side effects.
+
+Deterministic failure injection is test-only. The `chaos` marker runs focused
+claim, fencing, duplicate-delivery, and transaction-boundary validation; the
+`stress` marker runs larger DAG checks separately:
+
+```bash
+python -m pytest -m chaos -v
+python -m pytest -m "not stress" -v
+python -m pytest -m stress -v
+```
+
+The helpers use named checkpoints, events, and unique test resources. They do
+not enable fault injection in production and never use `FLUSHDB` or `FLUSHALL`.
+
 ## Current Status
 
 Fluxion currently provides a modular async-first FastAPI skeleton, settings
