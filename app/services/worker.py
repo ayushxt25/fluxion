@@ -23,6 +23,7 @@ from app.engine.registry import TaskCallable, TaskRegistry
 from app.engine.results import JSONValue, normalize_task_result
 from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
 from app.observability.metrics import (
+    record_task_attempt_abandoned,
     record_task_attempt_failed,
     record_task_attempt_started,
     record_task_attempt_succeeded,
@@ -151,6 +152,9 @@ class TaskWorker:
                 workflow_run,
             )
             result = normalize_task_result(result, self._max_result_bytes)
+        except asyncio.CancelledError:
+            record_task_attempt_abandoned()
+            raise
         except Exception as exc:  # noqa: BLE001
             if isinstance(exc, LeaseLostError):
                 record_task_attempt_failed(time.perf_counter() - started)
@@ -309,22 +313,23 @@ class TaskWorker:
         heartbeat_task = asyncio.create_task(
             self._heartbeat_until_done(message, attempt, callable_task)
         )
-        done, _ = await asyncio.wait(
-            {callable_task, heartbeat_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if heartbeat_task in done:
-            heartbeat_error = heartbeat_task.exception()
-            if heartbeat_error is not None:
-                callable_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await callable_task
-                raise heartbeat_error
-        else:
+        try:
+            done, _ = await asyncio.wait(
+                {callable_task, heartbeat_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if heartbeat_task in done:
+                heartbeat_error = heartbeat_task.exception()
+                if heartbeat_error is not None:
+                    callable_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await callable_task
+                    raise heartbeat_error
+            return await callable_task
+        finally:
             heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
                 await heartbeat_task
-        return await callable_task
 
     async def _heartbeat_until_done(
         self,

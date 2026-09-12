@@ -16,7 +16,12 @@ class Settings(BaseSettings):
     dispatch_queue_name: str = "fluxion:dispatch"
     worker_lease_seconds: float = 30
     worker_heartbeat_seconds: float = 10
+    worker_concurrency: int = 4
+    worker_shutdown_grace_seconds: float = 30
     scheduler_poll_seconds: float = 1.0
+    scheduler_max_dispatch_per_run: int = 10
+    scheduler_max_dispatch_per_tick: int = 100
+    dispatch_queue_high_watermark: int = 1000
     outbox_poll_seconds: float = 1.0
     outbox_batch_size: int = 100
     outbox_claim_seconds: float = 30
@@ -61,8 +66,23 @@ class Settings(BaseSettings):
             raise ValueError(
                 "WORKER_HEARTBEAT_SECONDS must be less than WORKER_LEASE_SECONDS."
             )
+        if self.worker_concurrency < 1:
+            raise ValueError("WORKER_CONCURRENCY must be at least 1.")
+        if self.worker_shutdown_grace_seconds <= 0:
+            raise ValueError("WORKER_SHUTDOWN_GRACE_SECONDS must be positive.")
         if self.scheduler_poll_seconds <= 0:
             raise ValueError("SCHEDULER_POLL_SECONDS must be positive.")
+        if self.scheduler_max_dispatch_per_run < 1:
+            raise ValueError("SCHEDULER_MAX_DISPATCH_PER_RUN must be at least 1.")
+        if self.scheduler_max_dispatch_per_tick < 1:
+            raise ValueError("SCHEDULER_MAX_DISPATCH_PER_TICK must be at least 1.")
+        if self.scheduler_max_dispatch_per_run > self.scheduler_max_dispatch_per_tick:
+            raise ValueError(
+                "SCHEDULER_MAX_DISPATCH_PER_RUN must not exceed "
+                "SCHEDULER_MAX_DISPATCH_PER_TICK."
+            )
+        if self.dispatch_queue_high_watermark < 1:
+            raise ValueError("DISPATCH_QUEUE_HIGH_WATERMARK must be at least 1.")
         if self.outbox_poll_seconds <= 0:
             raise ValueError("OUTBOX_POLL_SECONDS must be positive.")
         if self.outbox_batch_size <= 0:

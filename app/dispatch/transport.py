@@ -11,6 +11,8 @@ class TaskDispatcher(Protocol):
     async def receive(self, timeout: float | None = None) -> TaskDispatchMessage | None:
         ...
 
+    async def queue_depth(self) -> int: ...
+
     async def ping(self) -> None: ...
 
 
@@ -33,6 +35,9 @@ class InMemoryTaskDispatcher:
 
     async def ping(self) -> None:
         return None
+
+    async def queue_depth(self) -> int:
+        return self._queue.qsize()
 
 
 class RedisTaskDispatcher:
@@ -72,6 +77,13 @@ class RedisTaskDispatcher:
             await client.ping()
         except Exception as exc:
             raise DispatchError("Redis readiness check failed.") from exc
+
+    async def queue_depth(self) -> int:
+        try:
+            client = await self._get_client()
+            return int(await client.llen(self._queue_name))
+        except Exception as exc:
+            raise DispatchError("Failed to read dispatch queue depth.") from exc
 
     async def aclose(self) -> None:
         if self._client is not None:

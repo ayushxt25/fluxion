@@ -206,6 +206,26 @@ source value. Dependency-result parameters may reference direct dependencies
 only. Fluxion does not include an expression language, JSONPath/JMESPath,
 templating, environment interpolation, or dynamic code execution.
 
+## Worker Concurrency And Backpressure
+
+Each worker process admits at most `WORKER_CONCURRENCY` active leased task
+executions (default `4`). It receives a Redis dispatch only when capacity is
+available, so it does not prefetch an unbounded local backlog. Each active task
+keeps its own lease heartbeat; task completion remains fenced by its lease
+token. On shutdown, a worker stops receiving new messages and waits up to
+`WORKER_SHUTDOWN_GRACE_SECONDS` (default `30`) for active work. Work that does
+not finish remains lease-protected and is later handled conservatively by the
+lease reaper; shutdown never fabricates success.
+
+Scheduler ticks are deterministic by run ID and bounded by
+`SCHEDULER_MAX_DISPATCH_PER_TICK` (default `100`) and
+`SCHEDULER_MAX_DISPATCH_PER_RUN` (default `10`). This gives each incomplete run
+a turn before a single large run can consume the whole tick. When Redis queue
+depth reaches `DISPATCH_QUEUE_HIGH_WATERMARK` (default `1000`), the scheduler
+creates no new dispatch intents for that tick. This is backpressure only:
+already durable outbox events continue to publish, and PostgreSQL remains the
+source of truth.
+
 ## Docker Compose
 
 For a local multi-process cluster:
@@ -235,7 +255,10 @@ The `migrate` service runs `alembic upgrade head` once; the long-running
 services depend on its successful completion so every role does not race schema
 migrations. Local Compose defaults use development PostgreSQL credentials, but
 `JWT_SECRET` must be supplied through the environment and is not baked into the
-image.
+image. Worker concurrency can be adjusted with `WORKER_CONCURRENCY`; Compose
+starts one worker service by default. Additional workers may be started with
+`docker compose up --scale worker=2` when the deployment has sufficient shared
+PostgreSQL and Redis capacity.
 
 Control-plane endpoints live under `/api/v1`:
 

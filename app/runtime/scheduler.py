@@ -29,6 +29,7 @@ async def run(stop_event: asyncio.Event | None = None) -> None:
             WorkflowRepository(session),
             run_repository,
             TaskAttemptRepository(session),
+            resources.dispatcher,
             outbox_repository=DispatchOutboxRepository(session),
         )
         await SchedulerLoop(scheduler, run_repository).run(stop_event)

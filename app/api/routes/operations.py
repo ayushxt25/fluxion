@@ -47,6 +47,7 @@ router = APIRouter(prefix="/ops", tags=["operations"])
 async def scheduler_tick(
     request: Request,
     session: Annotated[AsyncSession, Depends(get_db_session)],
+    dispatcher: Annotated[RedisTaskDispatcher, Depends(get_redis_dispatcher)],
     principal: Annotated[Principal, Depends(get_current_principal)],
 ) -> SchedulerTickResponse:
     run_repository = WorkflowRunRepository(session)
@@ -54,6 +55,7 @@ async def scheduler_tick(
         WorkflowRepository(session),
         run_repository,
         TaskAttemptRepository(session),
+        dispatcher,
         outbox_repository=DispatchOutboxRepository(session),
     )
     result = await SchedulerLoop(scheduler, run_repository).tick()

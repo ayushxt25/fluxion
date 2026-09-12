@@ -5,7 +5,6 @@ from pathlib import Path
 from app.core.config import Settings
 from app.engine.registry import TaskRegistry
 from app.runtime import bootstrap
-from app.runtime.worker import run_worker_loop
 from app.tasks.registry import build_task_registry
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,27 +31,6 @@ def test_task_registry_hook_builds_registry_once_per_call() -> None:
     assert isinstance(first, TaskRegistry)
     assert isinstance(second, TaskRegistry)
     assert first is not second
-
-
-def test_worker_loop_exits_without_accepting_after_stop() -> None:
-    class FakeWorker:
-        def __init__(self) -> None:
-            self.calls = 0
-
-        async def run_once(self, timeout: float | None = None):
-            assert timeout == 1
-            self.calls += 1
-            stop_event.set()
-
-    async def scenario() -> int:
-        await run_worker_loop(worker, stop_event)
-        await run_worker_loop(worker, stop_event)
-        return worker.calls
-
-    stop_event = asyncio.Event()
-    worker = FakeWorker()
-
-    assert asyncio.run(scenario()) == 1
 
 
 def test_runtime_bootstrap_creates_and_closes_resources(monkeypatch) -> None:

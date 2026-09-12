@@ -134,6 +134,26 @@ def record_task_dispatches(count: int = 1) -> None:
         registry.inc_counter("fluxion_task_dispatches_total", amount=count)
 
 
+def record_scheduler_tick_dispatches(count: int) -> None:
+    registry.observe_histogram("fluxion_scheduler_dispatches_per_tick", count)
+
+
+def record_scheduler_backpressure() -> None:
+    registry.inc_counter("fluxion_scheduler_backpressure_total")
+
+
+def record_worker_capacity(capacity: int) -> None:
+    registry.set_gauge("fluxion_worker_capacity", capacity)
+
+
+def record_worker_dispatch_accepted() -> None:
+    registry.inc_counter("fluxion_worker_dispatches_accepted_total")
+
+
+def record_worker_dispatch_rejected() -> None:
+    registry.inc_counter("fluxion_worker_dispatches_rejected_total")
+
+
 def record_task_attempt_started() -> None:
     registry.inc_counter("fluxion_task_attempts_started_total")
     registry.inc_gauge("fluxion_worker_active_tasks", amount=1)
@@ -154,6 +174,10 @@ def record_task_attempt_failed(duration_seconds: float) -> None:
         "fluxion_task_execution_duration_seconds",
         duration_seconds,
     )
+    registry.inc_gauge("fluxion_worker_active_tasks", amount=-1)
+
+
+def record_task_attempt_abandoned() -> None:
     registry.inc_gauge("fluxion_worker_active_tasks", amount=-1)
 
 

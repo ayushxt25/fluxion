@@ -54,6 +54,9 @@ class FailingTaskDispatcher:
     async def receive(self, timeout: float | None = None) -> TaskDispatchMessage | None:
         return None
 
+    async def queue_depth(self) -> int:
+        return 0
+
 
 def task(
     task_id: str,

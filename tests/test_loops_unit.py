@@ -12,8 +12,8 @@ class FakeScheduler:
     def __init__(self) -> None:
         self.calls = []
 
-    async def dispatch_ready(self, run_id: str):
-        self.calls.append(run_id)
+    async def dispatch_ready(self, run_id: str, *, max_dispatch: int | None = None):
+        self.calls.append((run_id, max_dispatch))
 
         class Summary:
             dispatched_task_ids = ("a",)
@@ -60,7 +60,7 @@ def test_scheduler_loop_tick_dispatches_incomplete_runs() -> None:
         ).tick()
         return scheduler.calls, len(result.scheduled)
 
-    assert asyncio.run(scenario()) == (["run-1"], 1)
+    assert asyncio.run(scenario()) == ([("run-1", 100)], 1)
 
 
 def test_loop_run_stops_cleanly() -> None:
