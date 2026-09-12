@@ -38,6 +38,45 @@ through `TaskExecutionContext.dependency_results`.
 Phase 21 adds durable workflow run input and typed task parameter mappings from
 workflow input, direct dependency results, and literal JSON values.
 
+## Python SDK
+
+Fluxion ships a handwritten public Python SDK that uses only the REST API. It
+does not expose database sessions, repositories, or worker internals.
+
+```python
+from app.sdk import FluxionClient, WorkflowBuilder, dependency_result, workflow_input
+
+workflow = (
+    WorkflowBuilder("score-demo")
+    .task("demo.prepare", parameters={"seed": workflow_input("seed")})
+    .task(
+        "demo.process",
+        depends_on=["demo.prepare"],
+        parameters={
+            "value": dependency_result("demo.prepare", "value"),
+            "multiplier": workflow_input("multiplier"),
+        },
+    )
+    .build()
+)
+
+with FluxionClient("http://localhost:8000", token="<jwt>") as client:
+    client.create_workflow(workflow)
+    run = client.run_workflow(
+        workflow.id,
+        input={"seed": 21, "multiplier": 2},
+        wait=True,
+    )
+```
+
+`AsyncFluxionClient` exposes the same methods with async-native HTTP and
+polling. `workflow_input`, `dependency_result`, and `literal` create typed
+parameter mappings without raw discriminator dictionaries; `Retry` maps to the
+existing server retry policy. Omitted run input and explicit `None` remain
+distinct. The SDK returns typed Pydantic models and raises typed API errors,
+including `RateLimitError.retry_after`; it never automatically retries
+mutations. See `examples/basic_workflow.py` and `examples/async_workflow.py`.
+
 ## Planned Capabilities
 
 - Workflow definitions and DAG validation
