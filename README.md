@@ -87,6 +87,16 @@ heartbeats, and closes after a terminal run event. The history endpoint is
 lease tokens, credentials, and tracebacks. Runs created before this feature
 simply have no historic events; retention is intentionally not implemented.
 
+## Task Diagnostics
+
+Context-aware tasks can persist explicit structured diagnostics without stdout
+capture: `context.logger.info("Processed batch", records=120)`. Logs are
+attempt-scoped, ordered by sequence number, and remain available across retries
+and recovery. Retrieve them at the attempt logs endpoint or with
+`client.get_attempt_logs(...)`. Messages and fields are size-bounded; obvious
+secret field names are redacted. Logs are diagnostic-only, retained indefinitely
+for now, and persistence failures never alter canonical task success or failure.
+
 ## Planned Capabilities
 
 - Workflow definitions and DAG validation

@@ -4,6 +4,7 @@ from types import MappingProxyType
 from typing import Any
 
 from app.engine.results import JSONValue, clone_json_value
+from app.engine.task_logging import FluxionTaskLogger
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,14 @@ class TaskExecutionContext:
     dependency_results: Mapping[str, JSONValue] = field(default_factory=dict)
     workflow_input: JSONValue = None
     workflow_input_present: bool = False
+    logger: FluxionTaskLogger = field(
+        compare=False,
+        default_factory=lambda: FluxionTaskLogger(
+            max_message_bytes=8192,
+            max_fields_bytes=16384,
+            max_entries=10000,
+        )
+    )
 
     def __post_init__(self) -> None:
         object.__setattr__(

@@ -82,6 +82,20 @@ class TaskAttemptListResponse(BaseModel):
     count: int
 
 
+class TaskLogResponse(BaseModel):
+    sequence: int
+    level: str
+    message: str
+    fields: dict | None
+    created_at: datetime
+
+
+class TaskLogListResponse(BaseModel):
+    items: tuple[TaskLogResponse, ...]
+    limit: int
+    count: int
+
+
 class RunEventResponse(BaseModel):
     id: int
     version: int

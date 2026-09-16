@@ -135,6 +135,20 @@ class TaskAttemptList(SDKModel):
     count: int
 
 
+class TaskLog(SDKModel):
+    sequence: int
+    level: str
+    message: str
+    fields: dict[str, Any] | None = None
+    created_at: datetime
+
+
+class TaskLogList(SDKModel):
+    items: tuple[TaskLog, ...]
+    limit: int
+    count: int
+
+
 class RunEvent(SDKModel):
     id: int
     version: int

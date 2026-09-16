@@ -6,6 +6,7 @@ from app.db.models.execution import (
     TaskRunRecord,
     WorkflowRunRecord,
 )
+from app.db.models.logs import TaskLogRecord
 from app.db.models.workflow import (
     TaskDefinitionRecord,
     TaskDependencyRecord,
@@ -15,6 +16,7 @@ from app.db.models.workflow import (
 __all__ = [
     "AuditEventRecord",
     "RunEventRecord",
+    "TaskLogRecord",
     "TaskDefinitionRecord",
     "TaskDependencyRecord",
     "DispatchOutboxRecord",

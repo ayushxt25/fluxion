@@ -234,6 +234,19 @@ def record_sse_event() -> None:
     registry.inc_counter("fluxion_sse_events_streamed_total")
 
 
+def record_task_logs_persisted(entries: object) -> None:
+    count = len(entries)  # type: ignore[arg-type]
+    registry.inc_counter("fluxion_task_logs_persisted_total", amount=count)
+
+
+def record_task_log_persistence_failed() -> None:
+    registry.inc_counter("fluxion_task_log_persistence_failures_total")
+
+
+def record_task_log_validation_failed() -> None:
+    registry.inc_counter("fluxion_task_log_validation_failures_total")
+
+
 def _labels(labels: dict[str, str] | None) -> tuple[tuple[str, str], ...]:
     return tuple(sorted((labels or {}).items()))
 

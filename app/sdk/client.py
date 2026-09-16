@@ -25,6 +25,7 @@ from app.sdk.models import (
     RunEventList,
     SchedulerTickResult,
     TaskAttemptList,
+    TaskLogList,
     TaskRun,
     Workflow,
     WorkflowList,
@@ -183,6 +184,22 @@ class FluxionClient:
     def list_task_attempts(self, run_id: str, task_id: str) -> TaskAttemptList:
         return self._model(
             "GET", f"/api/v1/runs/{run_id}/tasks/{task_id}/attempts", TaskAttemptList
+        )
+
+    def get_attempt_logs(
+        self,
+        run_id: str,
+        task_id: str,
+        attempt_number: int,
+        *,
+        after_sequence: int | None = None,
+        limit: int = 100,
+    ) -> TaskLogList:
+        return self._model(
+            "GET",
+            f"/api/v1/runs/{run_id}/tasks/{task_id}/attempts/{attempt_number}/logs",
+            TaskLogList,
+            params={"after_sequence": after_sequence, "limit": limit},
         )
 
     def list_run_events(

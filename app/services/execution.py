@@ -27,6 +27,7 @@ from app.engine.results import (
     normalize_workflow_input,
 )
 from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
+from app.engine.task_logging import FluxionTaskLogger
 from app.observability.metrics import (
     record_task_attempt_failed,
     record_task_attempt_started,
@@ -41,6 +42,7 @@ from app.services.repositories import (
     WorkflowRepository,
     WorkflowRunRepository,
 )
+from app.services.task_logs import TaskLogRepository, create_attempt_log_flusher
 
 
 class _SystemClock:
@@ -592,8 +594,19 @@ class _DurableWorkflowRunner:
         attempt: TaskAttempt,
     ) -> _TaskExecutionOutcome:
         attempt_timer = time.perf_counter()
+        log_flusher = create_attempt_log_flusher(
+            repository=(
+                TaskLogRepository(self._attempt_repository._session)
+                if hasattr(self._attempt_repository, "_session")
+                else None
+            ),
+            run_id=attempt.run_id,
+            workflow_id=attempt.workflow_id,
+            task_id=task_id,
+            attempt_number=attempt.attempt_number,
+        )
         try:
-            result = await self._call_task(task_id, attempt)
+            result = await self._call_task(task_id, attempt, log_flusher.logger)
             result = normalize_task_result(result, self._max_result_bytes)
         except Exception as exc:  # noqa: BLE001
             if isinstance(exc, TaskResultValidationError):
@@ -606,6 +619,8 @@ class _DurableWorkflowRunner:
                 result=None,
                 error=f"{type(exc).__name__}: {exc}",
             )
+        finally:
+            await log_flusher.close()
         self._attempt_durations[
             (attempt.run_id, attempt.task_id, attempt.attempt_number)
         ] = time.perf_counter() - attempt_timer
@@ -651,7 +666,12 @@ class _DurableWorkflowRunner:
         await self._sleeper.sleep(delay)
         return True
 
-    async def _call_task(self, task_id: str, attempt: TaskAttempt) -> object:
+    async def _call_task(
+        self,
+        task_id: str,
+        attempt: TaskAttempt,
+        task_logger: FluxionTaskLogger,
+    ) -> object:
         binding = self._registry.binding(task_id)
         arguments = ()
         dependency_results = self._run.direct_dependency_results(task_id)
@@ -669,6 +689,7 @@ class _DurableWorkflowRunner:
                     dependency_results=dependency_results,
                     workflow_input=self._run.workflow_input,
                     workflow_input_present=self._run.workflow_input_present,
+                    logger=task_logger,
                 ),
             )
         keyword_arguments = resolve_task_parameters(

@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     sse_poll_interval_seconds: float = 0.5
     sse_heartbeat_seconds: float = 15
     sse_event_batch_size: int = 100
+    task_log_buffer_size: int = 50
+    task_log_max_message_bytes: int = 8192
+    task_log_max_fields_bytes: int = 16384
+    task_log_max_entries_per_attempt: int = 10000
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -136,6 +140,14 @@ class Settings(BaseSettings):
             raise ValueError("SSE_HEARTBEAT_SECONDS must be positive.")
         if self.sse_event_batch_size < 1:
             raise ValueError("SSE_EVENT_BATCH_SIZE must be at least 1.")
+        if self.task_log_buffer_size < 1:
+            raise ValueError("TASK_LOG_BUFFER_SIZE must be at least 1.")
+        if self.task_log_max_message_bytes < 1:
+            raise ValueError("TASK_LOG_MAX_MESSAGE_BYTES must be at least 1.")
+        if self.task_log_max_fields_bytes < 1:
+            raise ValueError("TASK_LOG_MAX_FIELDS_BYTES must be at least 1.")
+        if self.task_log_max_entries_per_attempt < 1:
+            raise ValueError("TASK_LOG_MAX_ENTRIES_PER_ATTEMPT must be at least 1.")
         return self
 
 

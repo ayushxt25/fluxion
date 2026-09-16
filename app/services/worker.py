@@ -22,11 +22,13 @@ from app.engine.parameters import resolve_task_parameters
 from app.engine.registry import TaskCallable, TaskRegistry
 from app.engine.results import JSONValue, normalize_task_result
 from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
+from app.engine.task_logging import FluxionTaskLogger, TaskLogValidationError
 from app.observability.metrics import (
     record_task_attempt_abandoned,
     record_task_attempt_failed,
     record_task_attempt_started,
     record_task_attempt_succeeded,
+    record_task_log_validation_failed,
     record_task_result_validation_failed,
     record_task_retry,
 )
@@ -36,6 +38,7 @@ from app.services.repositories import (
     WorkflowRepository,
     WorkflowRunRepository,
 )
+from app.services.task_logs import TaskLogRepository, create_attempt_log_flusher
 
 logger = logging.getLogger(__name__)
 
@@ -144,15 +147,28 @@ class TaskWorker:
         error: str | None = None
         result: JSONValue = None
         started = time.perf_counter()
+        log_flusher = create_attempt_log_flusher(
+            repository=(
+                TaskLogRepository(self._attempt_repository._session)
+                if hasattr(self._attempt_repository, "_session")
+                else None
+            ),
+            run_id=message.run_id,
+            workflow_id=message.workflow_id,
+            task_id=message.task_id,
+            attempt_number=message.attempt_number,
+        )
         try:
             result = await self._call_task_with_heartbeat(
                 message,
                 running_attempt,
                 workflow,
                 workflow_run,
+                log_flusher.logger,
             )
             result = normalize_task_result(result, self._max_result_bytes)
         except asyncio.CancelledError:
+            await log_flusher.close()
             record_task_attempt_abandoned()
             raise
         except Exception as exc:  # noqa: BLE001
@@ -172,7 +188,11 @@ class TaskWorker:
                 raise
             if isinstance(exc, TaskResultValidationError):
                 record_task_result_validation_failed()
+            if isinstance(exc, TaskLogValidationError):
+                record_task_log_validation_failed()
             error = f"{type(exc).__name__}: {exc}"
+
+        await log_flusher.close()
 
         if error is None:
             workflow_run.complete_task(message.task_id, result=result)
@@ -306,9 +326,10 @@ class TaskWorker:
         attempt: TaskAttempt,
         workflow: WorkflowDefinition,
         workflow_run: WorkflowRun,
+        task_logger: FluxionTaskLogger,
     ) -> object:
         callable_task = asyncio.create_task(
-            self._call_task(message, attempt, workflow, workflow_run)
+            self._call_task(message, attempt, workflow, workflow_run, task_logger)
         )
         heartbeat_task = asyncio.create_task(
             self._heartbeat_until_done(message, attempt, callable_task)
@@ -357,6 +378,7 @@ class TaskWorker:
         attempt: TaskAttempt,
         workflow: WorkflowDefinition,
         workflow_run: WorkflowRun,
+        task_logger: FluxionTaskLogger,
     ) -> object:
         binding = self._registry.binding(message.task_id)
         arguments = ()
@@ -375,6 +397,7 @@ class TaskWorker:
                     dependency_results=dependency_results,
                     workflow_input=workflow_run.workflow_input,
                     workflow_input_present=workflow_run.workflow_input_present,
+                    logger=task_logger,
                 ),
             )
         keyword_arguments = resolve_task_parameters(
