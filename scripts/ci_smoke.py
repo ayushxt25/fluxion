@@ -15,16 +15,17 @@ def main() -> int:
 
     deadline = time.monotonic() + args.timeout
     endpoint = args.api_url.rstrip("/") + "/ready"
+    last_error: Exception | None = None
     while time.monotonic() < deadline:
         try:
             with urlopen(endpoint, timeout=2) as response:  # noqa: S310
                 if response.status == 200:
                     print("Fluxion API is ready.")
                     return 0
-        except URLError:
-            pass
+        except (ConnectionRefusedError, ConnectionResetError, OSError, URLError) as exc:
+            last_error = exc
         time.sleep(args.interval)
-    print("Fluxion API did not become ready in time.")
+    print(f"Fluxion API did not become ready in time: {last_error!r}")
     return 1
 
 
