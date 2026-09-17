@@ -483,8 +483,7 @@ async def test_rate_limit_exceeded_shape_and_separate_principals() -> None:
                 "/api/v1/workflows",
                 headers={
                     "Authorization": (
-                        "Bearer "
-                        f"{create_access_token('another-viewer', Role.VIEWER)}"
+                        f"Bearer {create_access_token('another-viewer', Role.VIEWER)}"
                     )
                 },
             )

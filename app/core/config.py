@@ -54,6 +54,17 @@ class Settings(BaseSettings):
     task_log_max_message_bytes: int = 8192
     task_log_max_fields_bytes: int = 16384
     task_log_max_entries_per_attempt: int = 10000
+    webhook_enabled: bool = True
+    webhook_request_timeout_seconds: float = 10
+    webhook_max_attempts: int = 8
+    webhook_initial_backoff_seconds: float = 1
+    webhook_backoff_multiplier: float = 2
+    webhook_max_backoff_seconds: float = 300
+    webhook_claim_seconds: float = 30
+    webhook_batch_size: int = 50
+    webhook_poll_interval_seconds: float = 1
+    webhook_allow_insecure_http: bool = False
+    webhook_allow_private_networks: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -148,6 +159,16 @@ class Settings(BaseSettings):
             raise ValueError("TASK_LOG_MAX_FIELDS_BYTES must be at least 1.")
         if self.task_log_max_entries_per_attempt < 1:
             raise ValueError("TASK_LOG_MAX_ENTRIES_PER_ATTEMPT must be at least 1.")
+        if self.webhook_request_timeout_seconds <= 0:
+            raise ValueError("WEBHOOK_REQUEST_TIMEOUT_SECONDS must be positive.")
+        if self.webhook_max_attempts < 1 or self.webhook_initial_backoff_seconds <= 0:
+            raise ValueError("Webhook retry settings must be positive.")
+        if self.webhook_backoff_multiplier < 1 or self.webhook_max_backoff_seconds <= 0:
+            raise ValueError("Webhook backoff settings are invalid.")
+        if self.webhook_claim_seconds <= 0 or self.webhook_batch_size < 1:
+            raise ValueError("Webhook claim settings are invalid.")
+        if self.webhook_poll_interval_seconds <= 0:
+            raise ValueError("WEBHOOK_POLL_INTERVAL_SECONDS must be positive.")
         return self
 
 

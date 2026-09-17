@@ -105,9 +105,7 @@ class WorkflowRepository:
                         retry_initial_backoff_seconds=(
                             task.retry_policy.initial_backoff_seconds
                         ),
-                        retry_backoff_multiplier=(
-                            task.retry_policy.backoff_multiplier
-                        ),
+                        retry_backoff_multiplier=(task.retry_policy.backoff_multiplier),
                         retry_max_backoff_seconds=(
                             task.retry_policy.max_backoff_seconds
                         ),
@@ -216,9 +214,9 @@ class WorkflowRepository:
                 for task in record.tasks
             }
             for dependency in dependency_result.scalars():
-                dependencies[
-                    (dependency.workflow_id, dependency.task_id)
-                ].append(dependency.depends_on_task_id)
+                dependencies[(dependency.workflow_id, dependency.task_id)].append(
+                    dependency.depends_on_task_id
+                )
 
         workflows = []
         for record in records:
@@ -233,21 +231,21 @@ class WorkflowRepository:
                             depends_on=tuple(
                                 sorted(dependencies[(record.id, task.task_id)])
                             ),
-                                retry_policy=RetryPolicy(
-                                    max_attempts=task.retry_max_attempts,
-                                    initial_backoff_seconds=(
-                                        task.retry_initial_backoff_seconds
-                                    ),
-                                    backoff_multiplier=task.retry_backoff_multiplier,
-                                    max_backoff_seconds=task.retry_max_backoff_seconds,
+                            retry_policy=RetryPolicy(
+                                max_attempts=task.retry_max_attempts,
+                                initial_backoff_seconds=(
+                                    task.retry_initial_backoff_seconds
                                 ),
-                                parameters=task.parameters or {},
-                            )
-                            for task in sorted(
-                                record.tasks,
-                                key=lambda item: item.task_id,
-                            )
-                        ),
+                                backoff_multiplier=task.retry_backoff_multiplier,
+                                max_backoff_seconds=task.retry_max_backoff_seconds,
+                            ),
+                            parameters=task.parameters or {},
+                        )
+                        for task in sorted(
+                            record.tasks,
+                            key=lambda item: item.task_id,
+                        )
+                    ),
                 )
             )
         return tuple(workflows)
@@ -613,13 +611,10 @@ class DispatchOutboxRepository:
             record = await self._session.get(DispatchOutboxRecord, event_id)
             if record is None:
                 raise PersistenceError(f"Dispatch outbox event '{event_id}' not found.")
-            if (
-                (publisher_id is not None or claim_token is not None)
-                and (
-                    record.claimed_by != publisher_id
-                    or record.claim_token != claim_token
-                    or record.published_at is not None
-                )
+            if (publisher_id is not None or claim_token is not None) and (
+                record.claimed_by != publisher_id
+                or record.claim_token != claim_token
+                or record.published_at is not None
             ):
                 raise PersistenceError(
                     f"Dispatch outbox event '{event_id}' claim was lost."
@@ -645,13 +640,10 @@ class DispatchOutboxRepository:
             record = await self._session.get(DispatchOutboxRecord, event_id)
             if record is None:
                 raise PersistenceError(f"Dispatch outbox event '{event_id}' not found.")
-            if (
-                (publisher_id is not None or claim_token is not None)
-                and (
-                    record.claimed_by != publisher_id
-                    or record.claim_token != claim_token
-                    or record.published_at is not None
-                )
+            if (publisher_id is not None or claim_token is not None) and (
+                record.claimed_by != publisher_id
+                or record.claim_token != claim_token
+                or record.published_at is not None
             ):
                 raise PersistenceError(
                     f"Dispatch outbox event '{event_id}' claim was lost."
@@ -692,13 +684,10 @@ class DispatchOutboxRepository:
             record = await self._session.get(DispatchOutboxRecord, event_id)
             if record is None:
                 raise PersistenceError(f"Dispatch outbox event '{event_id}' not found.")
-            if (
-                (publisher_id is not None or claim_token is not None)
-                and (
-                    record.claimed_by != publisher_id
-                    or record.claim_token != claim_token
-                    or record.published_at is not None
-                )
+            if (publisher_id is not None or claim_token is not None) and (
+                record.claimed_by != publisher_id
+                or record.claim_token != claim_token
+                or record.published_at is not None
             ):
                 raise PersistenceError(
                     f"Dispatch outbox event '{event_id}' claim was lost."
@@ -1281,6 +1270,7 @@ class TaskAttemptRepository:
             for record in result.scalars():
                 record.status = AttemptStatus.INTERRUPTED.value
                 record.finished_at = finished_at
+
     async def _save_workflow_state(self, workflow_run: WorkflowRun) -> None:
         result = await self._session.execute(
             select(WorkflowRunRecord)

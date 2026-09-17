@@ -68,8 +68,7 @@ def test_multiple_wide_workflows_keep_independent_task_state() -> None:
             id=f"stress-workflow-{workflow_index:02d}",
             name="Independent",
             tasks=tuple(
-                TaskDefinition(id=f"task-{task_index:02d}")
-                for task_index in range(50)
+                TaskDefinition(id=f"task-{task_index:02d}") for task_index in range(50)
             ),
         )
         run = WorkflowRun.create(f"run-{workflow_index:02d}", workflow)

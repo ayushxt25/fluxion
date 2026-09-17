@@ -29,6 +29,10 @@ from app.sdk.models import (
     TaskAttemptList,
     TaskLogList,
     TaskRun,
+    WebhookDelivery,
+    WebhookDeliveryList,
+    WebhookSubscription,
+    WebhookSubscriptionList,
     Workflow,
     WorkflowList,
     WorkflowRun,
@@ -211,7 +215,9 @@ class AsyncFluxionClient:
         self, run_id: str, *, after: int | None = None, limit: int = 100
     ) -> RunEventList:
         return await self._model(
-            "GET", f"/api/v1/runs/{run_id}/events/history", RunEventList,
+            "GET",
+            f"/api/v1/runs/{run_id}/events/history",
+            RunEventList,
             params={"after": after, "limit": limit},
         )
 
@@ -221,7 +227,9 @@ class AsyncFluxionClient:
         headers = {"Last-Event-ID": str(after)} if after is not None else {}
         try:
             async with self._client.stream(
-                "GET", f"/api/v1/runs/{run_id}/events", headers=headers,
+                "GET",
+                f"/api/v1/runs/{run_id}/events",
+                headers=headers,
                 timeout=timeout or self.timeout,
             ) as response:
                 raise_for_response(response)
@@ -252,6 +260,67 @@ class AsyncFluxionClient:
 
     async def resume_run(self, run_id: str) -> WorkflowRun:
         return await self._model("POST", f"/api/v1/runs/{run_id}/resume", WorkflowRun)
+
+    async def create_webhook_subscription(
+        self,
+        *,
+        name: str,
+        target_url: str,
+        secret: str,
+        event_types: tuple[str, ...],
+        workflow_id: str | None = None,
+    ) -> WebhookSubscription:
+        return await self._model(
+            "POST",
+            "/api/v1/webhooks",
+            WebhookSubscription,
+            json={
+                "name": name,
+                "target_url": target_url,
+                "secret": secret,
+                "event_types": event_types,
+                "workflow_id": workflow_id,
+            },
+        )
+
+    async def list_webhook_subscriptions(self) -> WebhookSubscriptionList:
+        return await self._model("GET", "/api/v1/webhooks", WebhookSubscriptionList)
+
+    async def disable_webhook_subscription(self, subscription_id: str) -> None:
+        await self._request("DELETE", f"/api/v1/webhooks/{subscription_id}")
+
+    create_webhook = create_webhook_subscription
+    list_webhooks = list_webhook_subscriptions
+
+    async def get_webhook(self, subscription_id: str) -> WebhookSubscription:
+        return await self._model(
+            "GET", f"/api/v1/webhooks/{subscription_id}", WebhookSubscription
+        )
+
+    async def update_webhook(
+        self, subscription_id: str, **changes: Any
+    ) -> WebhookSubscription:
+        return await self._model(
+            "PATCH",
+            f"/api/v1/webhooks/{subscription_id}",
+            WebhookSubscription,
+            json=changes,
+        )
+
+    async def disable_webhook(self, subscription_id: str) -> None:
+        await self._request("POST", f"/api/v1/webhooks/{subscription_id}/disable")
+
+    async def list_webhook_deliveries(
+        self, subscription_id: str
+    ) -> WebhookDeliveryList:
+        return await self._model(
+            "GET", f"/api/v1/webhooks/{subscription_id}/deliveries", WebhookDeliveryList
+        )
+
+    async def get_webhook_delivery(self, delivery_id: str) -> WebhookDelivery:
+        return await self._model(
+            "GET", f"/api/v1/webhook-deliveries/{delivery_id}", WebhookDelivery
+        )
 
     async def run_workflow(
         self,

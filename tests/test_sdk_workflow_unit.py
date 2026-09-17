@@ -34,10 +34,12 @@ def test_builder_serializes_parameter_helpers_and_retry() -> None:
         lambda: WorkflowBuilder("x").task("a").task("a"),
         lambda: WorkflowBuilder("x").task("a", depends_on=["missing"]).build(),
         lambda: WorkflowBuilder("x").task("a", depends_on=["a"]),
-        lambda: WorkflowBuilder("x")
-        .task("a", depends_on=["b"])
-        .task("b", depends_on=["a"])
-        .build(),
+        lambda: (
+            WorkflowBuilder("x")
+            .task("a", depends_on=["b"])
+            .task("b", depends_on=["a"])
+            .build()
+        ),
         lambda: WorkflowBuilder("x").task(
             "b",
             depends_on=["a"],

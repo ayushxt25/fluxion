@@ -189,10 +189,7 @@ class WorkflowRecoveryService:
                         attempt.lease_expires_at,
                     )
                 )
-                if (
-                    attempt.status != AttemptStatus.RUNNING
-                    and has_any_lease_metadata
-                ):
+                if attempt.status != AttemptStatus.RUNNING and has_any_lease_metadata:
                     raise RecoveryStateError(
                         workflow_run.run_id,
                         f"task '{task_id}' has lease metadata on a "

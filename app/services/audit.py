@@ -146,5 +146,13 @@ def _event_from_record(record: AuditEventRecord) -> AuditEvent:
 def _sanitize_metadata(metadata: dict | None) -> dict | None:
     if metadata is None:
         return None
-    blocked = {"authorization", "token", "jwt", "jwt_secret", "lease_token"}
+    blocked = {
+        "authorization",
+        "token",
+        "jwt",
+        "jwt_secret",
+        "lease_token",
+        "secret",
+        "webhook_secret",
+    }
     return {key: value for key, value in metadata.items() if key.lower() not in blocked}

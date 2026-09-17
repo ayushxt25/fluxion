@@ -26,9 +26,7 @@ class SelfDependencyError(WorkflowValidationError):
 
 class UnknownDependencyError(WorkflowValidationError):
     def __init__(self, task_id: str, dependency_id: str) -> None:
-        super().__init__(
-            f"Task '{task_id}' depends on unknown task '{dependency_id}'."
-        )
+        super().__init__(f"Task '{task_id}' depends on unknown task '{dependency_id}'.")
 
 
 class CycleDetectedError(WorkflowValidationError):
@@ -164,8 +162,7 @@ class InvalidDispatchMessageError(DispatchError):
 class DispatchStateError(DispatchError):
     def __init__(self, run_id: str, task_id: str, reason: str) -> None:
         super().__init__(
-            f"Dispatch state for run '{run_id}' task '{task_id}' is invalid: "
-            f"{reason}"
+            f"Dispatch state for run '{run_id}' task '{task_id}' is invalid: {reason}"
         )
 
 
@@ -189,9 +186,7 @@ class WorkerLeaseError(Exception):
 
 class LeaseClaimError(WorkerLeaseError):
     def __init__(self, run_id: str, task_id: str, reason: str) -> None:
-        super().__init__(
-            f"Could not claim run '{run_id}' task '{task_id}': {reason}"
-        )
+        super().__init__(f"Could not claim run '{run_id}' task '{task_id}': {reason}")
 
 
 class LeaseLostError(WorkerLeaseError):

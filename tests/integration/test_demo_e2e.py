@@ -193,9 +193,7 @@ def test_demo_distributed_e2e_happy_path() -> None:
             async def heartbeat_seen() -> bool:
                 attempts = await load_attempts(session_factory, run_id)
                 prepare_attempt = next(
-                    attempt
-                    for attempt in attempts
-                    if attempt.task_id == "demo.prepare"
+                    attempt for attempt in attempts if attempt.task_id == "demo.prepare"
                 )
                 return (
                     prepare_attempt.status == AttemptStatus.RUNNING

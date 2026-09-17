@@ -64,8 +64,7 @@ class TaskRegistry:
         if configured != expected:
             raise InvalidTaskCallableError(
                 task.id,
-                "configured parameters must match callable keyword-only "
-                "parameters.",
+                "configured parameters must match callable keyword-only parameters.",
             )
 
     def _bind(
@@ -109,10 +108,7 @@ class TaskRegistry:
 
         if len(positional) == 0:
             accepts_context = False
-        elif (
-            len(positional) == 1
-            and positional[0].default is inspect.Parameter.empty
-        ):
+        elif len(positional) == 1 and positional[0].default is inspect.Parameter.empty:
             accepts_context = True
         else:
             try:

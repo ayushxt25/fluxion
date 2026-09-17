@@ -216,3 +216,35 @@ class AuditEventList(SDKModel):
     limit: int
     offset: int
     count: int
+
+
+class WebhookSubscription(SDKModel):
+    id: str
+    name: str
+    target_url: str
+    enabled: bool
+    event_types: tuple[str, ...]
+    workflow_id: str | None = None
+    secret_configured: bool
+
+
+class WebhookSubscriptionList(SDKModel):
+    items: tuple[WebhookSubscription, ...]
+    count: int
+
+
+class WebhookDelivery(SDKModel):
+    id: str
+    subscription_id: str
+    run_event_id: int
+    status: str
+    attempt_count: int
+    next_attempt_at: datetime | None = None
+    last_status_code: int | None = None
+    last_error_type: str | None = None
+    delivered_at: datetime | None = None
+
+
+class WebhookDeliveryList(SDKModel):
+    items: tuple[WebhookDelivery, ...]
+    count: int

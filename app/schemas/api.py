@@ -163,3 +163,51 @@ class AuditEventListResponse(BaseModel):
     limit: int
     offset: int
     count: int
+
+
+class CreateWebhookSubscriptionRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    target_url: str = Field(min_length=1)
+    secret: str = Field(min_length=1)
+    event_types: tuple[str, ...] = Field(min_length=1)
+    workflow_id: str | None = None
+
+
+class UpdateWebhookSubscriptionRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    target_url: str | None = Field(default=None, min_length=1)
+    secret: str | None = Field(default=None, min_length=1)
+    event_types: tuple[str, ...] | None = Field(default=None, min_length=1)
+    workflow_id: str | None = None
+
+
+class WebhookSubscriptionResponse(BaseModel):
+    id: str
+    name: str
+    target_url: str
+    enabled: bool
+    event_types: tuple[str, ...]
+    workflow_id: str | None
+    secret_configured: bool
+
+
+class WebhookSubscriptionListResponse(BaseModel):
+    items: tuple[WebhookSubscriptionResponse, ...]
+    count: int
+
+
+class WebhookDeliveryResponse(BaseModel):
+    id: str
+    subscription_id: str
+    run_event_id: int
+    status: str
+    attempt_count: int
+    next_attempt_at: datetime | None
+    last_status_code: int | None
+    last_error_type: str | None
+    delivered_at: datetime | None
+
+
+class WebhookDeliveryListResponse(BaseModel):
+    items: tuple[WebhookDeliveryResponse, ...]
+    count: int

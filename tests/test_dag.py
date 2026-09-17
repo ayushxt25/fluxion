@@ -110,9 +110,7 @@ def test_simple_two_node_cycle_is_rejected() -> None:
 
 def test_longer_cycle_is_rejected() -> None:
     with pytest.raises(CycleDetectedError, match="a, b, c"):
-        WorkflowDAG(
-            workflow(task("a", ("c",)), task("b", ("a",)), task("c", ("b",)))
-        )
+        WorkflowDAG(workflow(task("a", ("c",)), task("b", ("a",)), task("c", ("b",))))
 
 
 def test_roots_detection() -> None:

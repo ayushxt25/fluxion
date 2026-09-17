@@ -7,6 +7,7 @@ from app.db.models.execution import (
     WorkflowRunRecord,
 )
 from app.db.models.logs import TaskLogRecord
+from app.db.models.webhooks import WebhookDeliveryRecord, WebhookSubscriptionRecord
 from app.db.models.workflow import (
     TaskDefinitionRecord,
     TaskDependencyRecord,
@@ -24,4 +25,6 @@ __all__ = [
     "TaskRunRecord",
     "WorkflowDefinitionRecord",
     "WorkflowRunRecord",
+    "WebhookDeliveryRecord",
+    "WebhookSubscriptionRecord",
 ]

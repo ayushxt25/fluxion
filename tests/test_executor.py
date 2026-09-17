@@ -42,8 +42,7 @@ def execute(
 
 def recorders(calls: list[str], task_ids: str) -> dict[str, object]:
     return {
-        task_id: lambda task_id=task_id: calls.append(task_id)
-        for task_id in task_ids
+        task_id: lambda task_id=task_id: calls.append(task_id) for task_id in task_ids
     }
 
 

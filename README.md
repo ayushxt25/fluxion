@@ -416,6 +416,23 @@ not enable fault injection in production and never use `FLUSHDB` or `FLUSHALL`.
 
 ## Current Status
 
+Phase 28 adds durable external run notifications. Admins create subscriptions at
+`/api/v1/webhooks`; each matching durable `run_event` produces one delivery
+intent, which the `fluxion-webhooks` runtime sends as a signed JSON POST. The
+runtime is PostgreSQL-only, uses fenced claims, retries non-2xx/network failures
+with bounded exponential backoff (honouring `Retry-After`), and records terminal
+`DELIVERED` or `DEAD` state. Payloads include `X-Fluxion-Delivery`,
+`X-Fluxion-Event`, `X-Fluxion-Timestamp`, and HMAC-SHA256
+`X-Fluxion-Signature`; redirects are disabled. HTTPS and public network targets
+are required by default; development overrides are explicit settings.
+
+Webhook delivery is at-least-once: receivers must deduplicate by the stable
+`X-Fluxion-Delivery` ID, and retries may arrive out of order. Redirects are
+never followed; local/private targets are blocked by default; and a persisted
+secret is never returned by the API. A delivery failure never changes workflow
+state. DNS resolution is checked before the request, but the connection is not
+DNS-pinned, so DNS rebinding remains a documented limitation.
+
 Fluxion currently provides a modular async-first FastAPI skeleton, settings
 management, a health endpoint, immutable workflow specification models, and a
 validated workflow DAG abstraction. It also tracks in-memory workflow run state

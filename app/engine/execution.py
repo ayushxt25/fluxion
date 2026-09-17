@@ -267,8 +267,7 @@ class WorkflowRun:
             sorted(
                 task_id
                 for task_id, task_run in self._task_runs.items()
-                if task_run.status == TaskStatus.RUNNING
-                and task_id not in excluded
+                if task_run.status == TaskStatus.RUNNING and task_id not in excluded
             )
         )
         return self.interrupt_tasks_for_recovery(interrupted)
@@ -355,12 +354,9 @@ class WorkflowRun:
                 "SUCCEEDED run contains non-SUCCEEDED tasks.",
             )
 
-        if (
-            self._status in {WorkflowStatus.PENDING, WorkflowStatus.RUNNING}
-            and all(
-                task_run.status == TaskStatus.SUCCEEDED
-                for task_run in self._task_runs.values()
-            )
+        if self._status in {WorkflowStatus.PENDING, WorkflowStatus.RUNNING} and all(
+            task_run.status == TaskStatus.SUCCEEDED
+            for task_run in self._task_runs.values()
         ):
             raise RecoveryStateError(
                 self.run_id,

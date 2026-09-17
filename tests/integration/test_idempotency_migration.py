@@ -160,8 +160,7 @@ def test_phase9_migration_backfills_task_run_idempotency_keys() -> None:
                         workflow,
                     )
                     assert (
-                        loaded.task_runs["charge"].idempotency_key
-                        == "run-123:charge"
+                        loaded.task_runs["charge"].idempotency_key == "run-123:charge"
                     )
 
                 async with session_factory() as session:

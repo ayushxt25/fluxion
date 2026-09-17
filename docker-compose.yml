@@ -111,6 +111,15 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  webhooks:
+    image: fluxion:local
+    build: .
+    command: ["fluxion-webhooks"]
+    environment: *app-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
 volumes:
   postgres-data:
   redis-data:

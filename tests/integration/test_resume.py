@@ -181,8 +181,7 @@ def test_resume_diamond_and_disconnected_components() -> None:
 
         assert result.status == WorkflowStatus.SUCCEEDED
         assert all(
-            status == TaskStatus.SUCCEEDED
-            for status in result.task_statuses.values()
+            status == TaskStatus.SUCCEEDED for status in result.task_statuses.values()
         )
         assert loaded.status == WorkflowStatus.SUCCEEDED
 

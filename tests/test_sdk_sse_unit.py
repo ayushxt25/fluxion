@@ -56,10 +56,13 @@ async def test_async_watch_parses_events() -> None:
 
 
 def test_sync_watch_rejects_malformed_event() -> None:
-    with FluxionClient(
-        "http://test",
-        transport=httpx.MockTransport(
-            lambda _: httpx.Response(200, text="data: not-json\n\n")
-        ),
-    ) as client, pytest.raises(FluxionAPIError):
+    with (
+        FluxionClient(
+            "http://test",
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, text="data: not-json\n\n")
+            ),
+        ) as client,
+        pytest.raises(FluxionAPIError),
+    ):
         list(client.watch_run("run"))

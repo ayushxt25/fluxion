@@ -16,11 +16,14 @@ async def test_sdk_creates_and_reads_workflow_runs_over_public_api() -> None:
         .task("demo.prepare")
         .build()
     )
-    async with api_client() as (server, _), AsyncFluxionClient(
-        "http://testserver",
-        token=auth_headers(Role.OPERATOR)["Authorization"].removeprefix("Bearer "),
-        transport=httpx.ASGITransport(app=server._transport.app),
-    ) as client:
+    async with (
+        api_client() as (server, _),
+        AsyncFluxionClient(
+            "http://testserver",
+            token=auth_headers(Role.OPERATOR)["Authorization"].removeprefix("Bearer "),
+            transport=httpx.ASGITransport(app=server._transport.app),
+        ) as client,
+    ):
         created = await client.create_workflow(workflow)
         run = await client.create_run(created.id, run_id="sdk-api-run", input=None)
         fetched = await client.get_run(run.run_id)

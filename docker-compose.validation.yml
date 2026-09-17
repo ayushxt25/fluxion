@@ -1,0 +1,24 @@
+services:
+  postgres:
+    environment:
+      POSTGRES_DB: fluxion_test
+
+  validation:
+    image: python:3.11-slim
+    working_dir: /work
+    volumes:
+      - .:/work
+    environment:
+      DATABASE_URL: postgresql+asyncpg://fluxion:fluxion@postgres:5432/fluxion_test
+      TEST_DATABASE_URL: postgresql+asyncpg://fluxion:fluxion@postgres:5432/fluxion_test
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: phase28-validation-secret
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    entrypoint:
+      - sh
+      - -c
+      - apt-get update -qq && apt-get install -y -qq postgresql-client redis-tools && ./scripts/validate_phase28.sh

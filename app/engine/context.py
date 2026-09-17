@@ -24,7 +24,7 @@ class TaskExecutionContext:
             max_message_bytes=8192,
             max_fields_bytes=16384,
             max_entries=10000,
-        )
+        ),
     )
 
     def __post_init__(self) -> None:

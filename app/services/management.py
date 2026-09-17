@@ -204,9 +204,7 @@ def _run_response(
         status=workflow_run.status.value,
         created_at=created_at,
         input=(
-            workflow_run.workflow_input
-            if workflow_run.workflow_input_present
-            else None
+            workflow_run.workflow_input if workflow_run.workflow_input_present else None
         ),
         has_input=workflow_run.workflow_input_present,
         tasks=tasks,

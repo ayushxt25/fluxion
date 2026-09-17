@@ -18,8 +18,7 @@ def test_role_rate_limits_and_ops_limit() -> None:
     assert limit_for_role(Principal("operator", Role.OPERATOR), settings=settings) == 9
     assert limit_for_role(Principal("admin", Role.ADMIN), settings=settings) == 8
     assert (
-        limit_for_role(Principal("admin", Role.ADMIN), ops=True, settings=settings)
-        == 2
+        limit_for_role(Principal("admin", Role.ADMIN), ops=True, settings=settings) == 2
     )
 
 
