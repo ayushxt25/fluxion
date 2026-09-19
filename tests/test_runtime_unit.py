@@ -20,6 +20,8 @@ def test_console_scripts_are_registered() -> None:
         "fluxion-publisher": "app.runtime.publisher:main",
         "fluxion-reaper": "app.runtime.reaper:main",
         "fluxion-worker": "app.runtime.worker:main",
+        "fluxion-webhook": "app.runtime.webhooks:main",
+        "fluxion-webhooks": "app.runtime.webhooks:main",
         "fluxion-demo": "app.runtime.demo:cli",
     }
 
