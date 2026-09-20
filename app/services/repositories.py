@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from sqlalchemy import select
@@ -797,6 +797,12 @@ class DispatchOutboxRepository:
             raise WorkflowRunNotFoundError(workflow_run.run_id)
 
         _record_state_events(self._session, record, record.task_runs, workflow_run)
+        if record.status != workflow_run.status.value and workflow_run.status.value in {
+            "SUCCEEDED",
+            "FAILED",
+            "CANCELLED",
+        }:
+            record.completed_at = datetime.now(UTC)
         record.status = workflow_run.status.value
         record.input = workflow_run.workflow_input
         record.input_present = workflow_run.workflow_input_present
@@ -1076,7 +1082,13 @@ class TaskAttemptRepository:
                     attempt.task_id,
                     "task is no longer RUNNING.",
                 )
-            await self._save_workflow_state(workflow_run)
+            # A distributed worker owns only this task/attempt.  Do not persist
+            # its stale aggregate snapshot over concurrently claimed siblings.
+            current = workflow_run.task_runs[attempt.task_id]
+            task_record.status = current.status.value
+            task_record.next_retry_at = current.next_retry_at
+            task_record.result = current.result
+            task_record.result_present = current.result_present
             record.status = status.value
             record.finished_at = finished_at
             record.error_type = error_type
@@ -1085,6 +1097,31 @@ class TaskAttemptRepository:
             record.lease_token = None
             record.lease_expires_at = None
             record.last_heartbeat_at = None
+            task_states = tuple(
+                (
+                    await self._session.execute(
+                        select(TaskRunRecord.status).where(
+                            TaskRunRecord.run_id == attempt.run_id
+                        )
+                    )
+                ).scalars()
+            )
+            run_record = await self._session.get(
+                WorkflowRunRecord, attempt.run_id, with_for_update=True
+            )
+            if run_record is not None:
+                if all(state == TaskStatus.SUCCEEDED.value for state in task_states):
+                    run_record.status = WorkflowStatus.SUCCEEDED.value
+                elif any(
+                    state
+                    in {
+                        TaskStatus.FAILED.value,
+                        TaskStatus.CANCELLED.value,
+                        TaskStatus.INTERRUPTED.value,
+                    }
+                    for state in task_states
+                ):
+                    run_record.status = WorkflowStatus.FAILED.value
             RunEventRepository(self._session).record(
                 run_id=attempt.run_id,
                 workflow_id=attempt.workflow_id,

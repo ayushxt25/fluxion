@@ -39,6 +39,7 @@ def in_db(body):
                         await session.execute(select(WorkflowDefinitionRecord.id))
                     ).scalars()
                 ) == {"wf-a", "wf-b"}
+                await session.commit()
                 async with session.begin():
                     session.add_all(
                         [
