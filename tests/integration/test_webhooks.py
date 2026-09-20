@@ -27,27 +27,37 @@ def in_db(body):
             await connection.run_sync(Base.metadata.create_all)
         try:
             async with async_sessionmaker(engine, expire_on_commit=False)() as session:
-                session.add_all(
-                    [
-                        WorkflowDefinitionRecord(id="wf-a", name="a"),
-                        WorkflowDefinitionRecord(id="wf-b", name="b"),
-                        WorkflowRunRecord(
-                            run_id="run-a",
-                            workflow_id="wf-a",
-                            status="SUCCEEDED",
-                            input=None,
-                            input_present=False,
-                        ),
-                        WorkflowRunRecord(
-                            run_id="run-b",
-                            workflow_id="wf-b",
-                            status="SUCCEEDED",
-                            input=None,
-                            input_present=False,
-                        ),
-                    ]
-                )
-                await session.commit()
+                async with session.begin():
+                    session.add_all(
+                        [
+                            WorkflowDefinitionRecord(id="wf-a", name="a"),
+                            WorkflowDefinitionRecord(id="wf-b", name="b"),
+                        ]
+                    )
+                assert set(
+                    (
+                        await session.execute(select(WorkflowDefinitionRecord.id))
+                    ).scalars()
+                ) == {"wf-a", "wf-b"}
+                async with session.begin():
+                    session.add_all(
+                        [
+                            WorkflowRunRecord(
+                                run_id="run-a",
+                                workflow_id="wf-a",
+                                status="SUCCEEDED",
+                                input=None,
+                                input_present=False,
+                            ),
+                            WorkflowRunRecord(
+                                run_id="run-b",
+                                workflow_id="wf-b",
+                                status="SUCCEEDED",
+                                input=None,
+                                input_present=False,
+                            ),
+                        ]
+                    )
                 await body(session)
         finally:
             await engine.dispose()

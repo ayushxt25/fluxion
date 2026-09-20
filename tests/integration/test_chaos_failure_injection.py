@@ -16,6 +16,7 @@ if not test_database_name.endswith("_test"):
 
 # ruff: noqa: E402
 import asyncio
+import time
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -467,6 +468,25 @@ def test_bounded_worker_shutdown_keeps_overdue_work_lease_reclaimable() -> None:
             )
             await fast_started.wait()
             await slow_started.wait()
+            deadline = time.monotonic() + 1
+            while True:
+                async with factory() as session:
+                    run = await WorkflowRunRepository(session).get("run-1", definition)
+                    statuses = {
+                        task_id: run.get_task_status(task_id)
+                        for task_id in ("a-fast", "b-slow", "c-queued")
+                    }
+                if statuses == {
+                    "a-fast": TaskStatus.RUNNING,
+                    "b-slow": TaskStatus.RUNNING,
+                    "c-queued": TaskStatus.DISPATCHED,
+                }:
+                    break
+                if time.monotonic() >= deadline:
+                    raise AssertionError(
+                        f"Worker admission did not stabilize: {statuses}"
+                    )
+                await asyncio.sleep(0.005)
             stop_event.set()
             release_fast.set()
             assert await asyncio.wait_for(runtime, timeout=1) == "shutdown-worker"
