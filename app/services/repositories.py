@@ -1097,6 +1097,9 @@ class TaskAttemptRepository:
             record.lease_token = None
             record.lease_expires_at = None
             record.last_heartbeat_at = None
+            await _promote_ready_tasks_from_db(
+                self._session, attempt.run_id, attempt.workflow_id
+            )
             task_states = tuple(
                 (
                     await self._session.execute(
@@ -1342,3 +1345,43 @@ class TaskAttemptRepository:
 
 def _add_seconds(value: datetime, seconds: float) -> datetime:
     return value + timedelta(seconds=seconds)
+
+
+async def _promote_ready_tasks_from_db(
+    session: AsyncSession, run_id: str, workflow_id: str
+) -> None:
+    """Promote only durably unblocked siblings; never write a stale aggregate."""
+    rows = tuple(
+        (
+            await session.execute(
+                select(TaskRunRecord)
+                .where(TaskRunRecord.run_id == run_id)
+                .with_for_update()
+            )
+        ).scalars()
+    )
+    statuses = {row.task_id: row.status for row in rows}
+    dependencies: dict[str, set[str]] = {}
+    for task_id, dependency_id in await session.execute(
+        select(
+            TaskDependencyRecord.task_id,
+            TaskDependencyRecord.depends_on_task_id,
+        ).where(TaskDependencyRecord.workflow_id == workflow_id)
+    ):
+        dependencies.setdefault(task_id, set()).add(dependency_id)
+    events = RunEventRepository(session)
+    for row in rows:
+        if row.status != TaskStatus.BLOCKED.value:
+            continue
+        if all(
+            statuses.get(dependency) == TaskStatus.SUCCEEDED.value
+            for dependency in dependencies.get(row.task_id, ())
+        ):
+            row.status = TaskStatus.READY.value
+            events.record(
+                run_id=run_id,
+                workflow_id=workflow_id,
+                event_type="task.ready",
+                task_id=row.task_id,
+                payload={"status": TaskStatus.READY.value},
+            )
