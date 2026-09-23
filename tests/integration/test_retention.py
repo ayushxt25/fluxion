@@ -47,6 +47,7 @@ async def add_run(
 ) -> None:
     async with session.begin():
         session.add(WorkflowDefinitionRecord(id="wf", name="retention"))
+    async with session.begin():
         session.add(
             WorkflowRunRecord(
                 run_id=run_id,
@@ -59,12 +60,42 @@ async def add_run(
         )
 
 
+async def add_task_run(session, run_id: str) -> None:
+    async with session.begin():
+        session.add(TaskDefinitionRecord(workflow_id="wf", task_id="task"))
+    async with session.begin():
+        session.add(
+            TaskRunRecord(
+                run_id=run_id,
+                workflow_id="wf",
+                task_id="task",
+                status="SUCCEEDED",
+                idempotency_key=f"{run_id}:task",
+                result=None,
+                result_present=False,
+            )
+        )
+
+
+async def add_attempt(session, run_id: str) -> None:
+    async with session.begin():
+        session.add(
+            TaskAttemptRecord(
+                run_id=run_id,
+                workflow_id="wf",
+                task_id="task",
+                attempt_number=1,
+                status="SUCCEEDED",
+            )
+        )
+
+
 def retention(session, **settings):
     return RetentionService(RetentionRepository(session), Settings(**settings))
 
 
 @pytest.mark.parametrize("status", ["SUCCEEDED", "FAILED", "CANCELLED"])
-def test_old_terminal_runs_are_deleted_without_definitions(status):
+def test_old_terminal_runs_are_deleted_and_definition_survives(status):
     async def body(session):
         old = datetime.now(UTC) - timedelta(days=31)
         await add_run(session, "old", status=status, completed_at=old)
@@ -99,28 +130,9 @@ def test_task_logs_expire_independently_and_preview_does_not_mutate():
     async def body(session):
         old = datetime.now(UTC) - timedelta(days=31)
         await add_run(session, "run", completed_at=datetime.now(UTC))
+        await add_task_run(session, "run")
+        await add_attempt(session, "run")
         async with session.begin():
-            session.add(TaskDefinitionRecord(workflow_id="wf", task_id="task"))
-            session.add(
-                TaskRunRecord(
-                    run_id="run",
-                    workflow_id="wf",
-                    task_id="task",
-                    status="SUCCEEDED",
-                    idempotency_key="run:task",
-                    result=None,
-                    result_present=False,
-                )
-            )
-            session.add(
-                TaskAttemptRecord(
-                    run_id="run",
-                    workflow_id="wf",
-                    task_id="task",
-                    attempt_number=1,
-                    status="SUCCEEDED",
-                )
-            )
             session.add_all(
                 [
                     TaskLogRecord(
@@ -152,6 +164,7 @@ def test_task_logs_expire_independently_and_preview_does_not_mutate():
         assert (
             len((await session.execute(select(TaskLogRecord.id))).scalars().all()) == 2
         )
+        await session.rollback()
         summary = await service.run_retention(categories=("task_logs",))
         assert summary.total_deleted == 1
         assert (
@@ -259,19 +272,8 @@ def test_actionable_outbox_blocks_run_cleanup_until_discarded():
     async def body(session):
         old = datetime.now(UTC) - timedelta(days=31)
         await add_run(session, "run", completed_at=old)
+        await add_task_run(session, "run")
         async with session.begin():
-            session.add(TaskDefinitionRecord(workflow_id="wf", task_id="task"))
-            session.add(
-                TaskRunRecord(
-                    run_id="run",
-                    workflow_id="wf",
-                    task_id="task",
-                    status="SUCCEEDED",
-                    idempotency_key="run:task",
-                    result=None,
-                    result_present=False,
-                )
-            )
             session.add(
                 DispatchOutboxRecord(
                     id="outbox",
