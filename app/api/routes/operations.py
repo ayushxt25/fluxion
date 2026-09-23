@@ -1,6 +1,6 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import (
@@ -11,12 +11,15 @@ from app.api.dependencies import (
     require_role,
 )
 from app.api.pagination import LimitQuery, OffsetQuery
+from app.core.config import get_settings
 from app.dispatch.transport import RedisTaskDispatcher
 from app.schemas.api import (
     AuditEventListResponse,
     AuditEventResponse,
     LeaseReapResponse,
     OutboxPublishResponse,
+    RetentionRunRequest,
+    RetentionSummaryResponse,
     SchedulerTickResponse,
 )
 from app.security.models import Principal, Role
@@ -30,9 +33,78 @@ from app.services.repositories import (
     WorkflowRepository,
     WorkflowRunRepository,
 )
+from app.services.retention import RetentionRepository, RetentionService
 from app.services.scheduler import WorkflowScheduler
 
 router = APIRouter(prefix="/ops", tags=["operations"])
+
+
+def _retention_response(summary) -> RetentionSummaryResponse:
+    return RetentionSummaryResponse(
+        dry_run=summary.dry_run,
+        categories={name: item.__dict__ for name, item in summary.categories.items()},
+        total_deleted=summary.total_deleted,
+        started_at=summary.started_at,
+        completed_at=summary.completed_at,
+    )
+
+
+@router.get(
+    "/retention/preview",
+    response_model=RetentionSummaryResponse,
+    dependencies=[
+        Depends(require_role(Role.ADMIN)),
+        Depends(require_rate_limit(ops=True)),
+    ],
+)
+async def retention_preview(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    categories: Annotated[tuple[str, ...] | None, Query()] = None,
+) -> RetentionSummaryResponse:
+    try:
+        summary = await RetentionService(
+            RetentionRepository(session)
+        ).preview_retention(categories=categories)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return _retention_response(summary)
+
+
+@router.post(
+    "/retention/run",
+    response_model=RetentionSummaryResponse,
+    dependencies=[
+        Depends(require_role(Role.ADMIN)),
+        Depends(require_rate_limit(ops=True)),
+    ],
+)
+async def retention_run(
+    request: Request,
+    body: RetentionRunRequest,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[Principal, Depends(get_current_principal)],
+) -> RetentionSummaryResponse:
+    if not get_settings().retention_enabled:
+        raise HTTPException(status_code=409, detail="Retention is disabled.")
+    try:
+        summary = await RetentionService(RetentionRepository(session)).run_retention(
+            categories=body.categories
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await AuditService(AuditEventRepository(session)).record_success(
+        request_id=getattr(request.state, "request_id", ""),
+        principal=principal,
+        action="ops.retention.run",
+        metadata={
+            "categories": body.categories,
+            "total_deleted": summary.total_deleted,
+            "deleted": {
+                name: item.deleted for name, item in summary.categories.items()
+            },
+        },
+    )
+    return _retention_response(summary)
 
 
 @router.post(

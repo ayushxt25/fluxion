@@ -65,6 +65,15 @@ class Settings(BaseSettings):
     webhook_poll_interval_seconds: float = 1
     webhook_allow_insecure_http: bool = False
     webhook_allow_private_networks: bool = False
+    retention_enabled: bool = False
+    retention_completed_run_days: int = 30
+    retention_task_log_days: int = 14
+    retention_run_event_days: int = 30
+    retention_audit_event_days: int = 90
+    retention_webhook_delivery_days: int = 30
+    retention_outbox_days: int = 7
+    retention_batch_size: int = 500
+    retention_poll_interval_seconds: float = 3600
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -169,6 +178,20 @@ class Settings(BaseSettings):
             raise ValueError("Webhook claim settings are invalid.")
         if self.webhook_poll_interval_seconds <= 0:
             raise ValueError("WEBHOOK_POLL_INTERVAL_SECONDS must be positive.")
+        if any(
+            value < 1
+            for value in (
+                self.retention_completed_run_days,
+                self.retention_task_log_days,
+                self.retention_run_event_days,
+                self.retention_audit_event_days,
+                self.retention_webhook_delivery_days,
+                self.retention_outbox_days,
+            )
+        ):
+            raise ValueError("Retention day settings must be at least one.")
+        if self.retention_batch_size < 1 or self.retention_poll_interval_seconds <= 0:
+            raise ValueError("Retention batch and poll settings are invalid.")
         return self
 
 

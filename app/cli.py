@@ -17,11 +17,21 @@ def main() -> None:
         "worker",
         "webhook",
         "webhooks",
+        "retention",
         "demo",
     ):
         subcommands.add_parser(command, help=f"Run the Fluxion {command} runtime.")
     args = parser.parse_args()
-    from app.runtime import api, demo, publisher, reaper, scheduler, webhooks, worker
+    from app.runtime import (
+        api,
+        demo,
+        publisher,
+        reaper,
+        retention,
+        scheduler,
+        webhooks,
+        worker,
+    )
 
     runtimes = {
         "api": api.main,
@@ -31,6 +41,7 @@ def main() -> None:
         "worker": worker.main,
         "webhooks": webhooks.main,
         "webhook": webhooks.main,
+        "retention": retention.main,
         "demo": demo.cli,
     }
     runtimes[args.command]()

@@ -15,6 +15,8 @@ from app.sdk.errors import (
 )
 from app.sdk.models import (
     DependencyResultParameter,
+    RetentionCategorySummary,
+    RetentionSummary,
     Retry,
     RunEvent,
     RunEventList,
@@ -61,6 +63,8 @@ __all__ = [
     "WorkflowRun",
     "WebhookSubscription",
     "WebhookSubscriptionList",
+    "RetentionCategorySummary",
+    "RetentionSummary",
     "WebhookDelivery",
     "WebhookDeliveryList",
     "dependency_result",

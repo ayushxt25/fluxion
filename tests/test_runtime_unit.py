@@ -1,10 +1,11 @@
 import asyncio
 import tomllib
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from app.core.config import Settings
 from app.engine.registry import TaskRegistry
-from app.runtime import bootstrap
+from app.runtime import bootstrap, retention
 from app.tasks.registry import build_task_registry
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +23,7 @@ def test_console_scripts_are_registered() -> None:
         "fluxion-worker": "app.runtime.worker:main",
         "fluxion-webhook": "app.runtime.webhooks:main",
         "fluxion-webhooks": "app.runtime.webhooks:main",
+        "fluxion-retention": "app.runtime.retention:main",
         "fluxion-demo": "app.runtime.demo:cli",
     }
 
@@ -91,6 +93,8 @@ def test_docker_compose_defines_required_services_and_migration() -> None:
     assert "JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}" in compose
     assert "FLUSHDB" not in compose
     assert "FLUSHALL" not in compose
+    assert "retention:" in compose
+    assert 'profiles: ["maintenance"]' in compose
 
 
 def test_dockerfile_uses_single_non_root_runtime_image() -> None:
@@ -100,3 +104,45 @@ def test_dockerfile_uses_single_non_root_runtime_image() -> None:
     assert "USER fluxion" in dockerfile
     assert 'CMD ["fluxion-api"]' in dockerfile
     assert "JWT_SECRET" not in dockerfile
+
+
+def test_retention_runtime_disabled_does_not_create_database_engine(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        retention,
+        "create_async_engine",
+        lambda _: (_ for _ in ()).throw(AssertionError()),
+    )
+
+    asyncio.run(retention.run(settings=Settings(retention_enabled=False)))
+
+
+def test_retention_runtime_runs_one_bounded_pass_without_redis(monkeypatch) -> None:
+    stop_event = asyncio.Event()
+    calls: list[str] = []
+
+    class FakeEngine:
+        async def dispose(self) -> None:
+            calls.append("dispose")
+
+    @asynccontextmanager
+    async def fake_session():
+        yield object()
+
+    class FakeService:
+        def __init__(self, repository, settings) -> None:
+            assert repository._session is not None
+            assert settings.retention_enabled
+
+        async def run_retention(self):
+            calls.append("run")
+            stop_event.set()
+            return type("Summary", (), {"total_deleted": 0})()
+
+    monkeypatch.setattr(retention, "create_async_engine", lambda _: FakeEngine())
+    monkeypatch.setattr(retention, "async_sessionmaker", lambda *_, **__: fake_session)
+    monkeypatch.setattr(retention, "RetentionService", FakeService)
+
+    asyncio.run(retention.run(stop_event, Settings(retention_enabled=True)))
+    assert calls == ["run", "dispose"]

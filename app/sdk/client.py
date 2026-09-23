@@ -21,6 +21,7 @@ from app.sdk.models import (
     OutboxPublishResult,
     Readiness,
     RecoveryResult,
+    RetentionSummary,
     RunEvent,
     RunEventList,
     SchedulerTickResult,
@@ -289,6 +290,28 @@ class FluxionClient:
 
     def disable_webhook(self, subscription_id: str) -> None:
         self._request("POST", f"/api/v1/webhooks/{subscription_id}/disable")
+
+    def preview_retention(
+        self, categories: tuple[str, ...] | None = None
+    ) -> RetentionSummary:
+        params = (
+            None
+            if categories is None
+            else [("categories", item) for item in categories]
+        )
+        return self._model(
+            "GET", "/api/v1/ops/retention/preview", RetentionSummary, params=params
+        )
+
+    def run_retention(
+        self, categories: tuple[str, ...] | None = None
+    ) -> RetentionSummary:
+        return self._model(
+            "POST",
+            "/api/v1/ops/retention/run",
+            RetentionSummary,
+            json={} if categories is None else {"categories": categories},
+        )
 
     def list_webhook_deliveries(self, subscription_id: str) -> WebhookDeliveryList:
         return self._model(

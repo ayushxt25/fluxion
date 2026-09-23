@@ -85,7 +85,8 @@ stream replays events after `Last-Event-ID` (or `after`), sends comment
 heartbeats, and closes after a terminal run event. The history endpoint is
 `GET /api/v1/runs/{run_id}/events/history`. Events omit inputs, full results,
 lease tokens, credentials, and tracebacks. Runs created before this feature
-simply have no historic events; retention is intentionally not implemented.
+simply have no historic events. SSE replay is bounded by configured run-event
+retention, so an expired cursor continues from the retained history.
 
 ## Task Diagnostics
 
@@ -146,10 +147,12 @@ After installing the package, Fluxion exposes console scripts:
 - `fluxion-publisher`
 - `fluxion-reaper`
 - `fluxion-worker`
+- `fluxion-webhooks`
+- `fluxion-retention`
 - `fluxion-demo`
 
 The equivalent grouped command is
-`fluxion api|scheduler|publisher|reaper|worker|demo`.
+`fluxion api|scheduler|publisher|reaper|worker|webhook|retention|demo`.
 Each process loads settings once, configures logging once, opens shared
 PostgreSQL/Redis resources for its role, and shuts down on `SIGINT`/`SIGTERM`.
 
@@ -432,6 +435,36 @@ never followed; local/private targets are blocked by default; and a persisted
 secret is never returned by the API. A delivery failure never changes workflow
 state. DNS resolution is checked before the request, but the connection is not
 DNS-pinned, so DNS rebinding remains a documented limitation.
+
+## Retention and Lifecycle Management
+
+Retention is disabled by default (`RETENTION_ENABLED=false`). When enabled,
+the PostgreSQL-only `fluxion-retention` runtime performs one bounded,
+oldest-first cleanup pass per `RETENTION_POLL_INTERVAL_SECONDS`. It manages
+completed workflow runs, task logs, run events, terminal webhook deliveries,
+completed/discarded dispatch outbox rows, and audit events. Workflow and task
+definitions are never deleted.
+
+Run-tree deletion requires a `SUCCEEDED`, `FAILED`, or `CANCELLED` run with a
+non-null `completed_at` older than `RETENTION_COMPLETED_RUN_DAYS`; historical
+terminal rows without that timestamp are retained conservatively. Pending and
+running runs are never eligible. Active webhook deliveries protect their events
+and runs, and actionable outbox rows (`published_at` and `discarded_at` both
+null) protect their run. Cleanup uses bounded batches, oldest-first ordering,
+and `SKIP LOCKED`, so concurrent workers are safe. External archival storage is
+not implemented yet.
+
+Configure policy with `RETENTION_COMPLETED_RUN_DAYS`,
+`RETENTION_TASK_LOG_DAYS`, `RETENTION_RUN_EVENT_DAYS`,
+`RETENTION_AUDIT_EVENT_DAYS`, `RETENTION_WEBHOOK_DELIVERY_DAYS`,
+`RETENTION_OUTBOX_DAYS`, `RETENTION_BATCH_SIZE`, and
+`RETENTION_POLL_INTERVAL_SECONDS`.
+
+Admins can inspect configured eligibility without mutation via
+`GET /api/v1/ops/retention/preview`, or perform one bounded configured pass via
+`POST /api/v1/ops/retention/run`. The latter is audited. The Python SDK exposes
+`preview_retention()` and `run_retention()` on both synchronous and asynchronous
+clients.
 
 Fluxion currently provides a modular async-first FastAPI skeleton, settings
 management, a health endpoint, immutable workflow specification models, and a

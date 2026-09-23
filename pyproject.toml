@@ -38,6 +38,7 @@ fluxion-reaper = "app.runtime.reaper:main"
 fluxion-worker = "app.runtime.worker:main"
 fluxion-webhooks = "app.runtime.webhooks:main"
 fluxion-webhook = "app.runtime.webhooks:main"
+fluxion-retention = "app.runtime.retention:main"
 fluxion-demo = "app.runtime.demo:cli"
 
 [tool.hatch.build.targets.wheel]

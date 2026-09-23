@@ -36,6 +36,7 @@ class WorkflowRunRecord(Base):
         server_default=func.now(),
         nullable=False,
     )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     input: Mapped[dict | list | str | int | float | bool | None] = mapped_column(JSONB)
     input_present: Mapped[bool] = mapped_column(
         Boolean,

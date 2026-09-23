@@ -101,6 +101,22 @@ class MetricsRegistry:
 registry = MetricsRegistry()
 
 
+def record_retention_run(outcome: str, duration_seconds: float) -> None:
+    registry.inc_counter("fluxion_retention_runs_total", {"outcome": outcome})
+    registry.observe_histogram("fluxion_retention_duration_seconds", duration_seconds)
+
+
+def record_retention_deleted(category: str, deleted: int) -> None:
+    if deleted:
+        registry.inc_counter(
+            "fluxion_retention_deleted_total", {"category": category}, deleted
+        )
+
+
+def record_retention_error(category: str) -> None:
+    registry.inc_counter("fluxion_retention_errors_total", {"category": category})
+
+
 def reset_metrics_for_tests() -> None:
     registry.reset()
 

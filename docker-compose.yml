@@ -120,6 +120,24 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  retention:
+    image: fluxion:local
+    build: .
+    profiles: ["maintenance"]
+    command: ["fluxion-retention"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fluxion}:${POSTGRES_PASSWORD:-fluxion}@postgres:5432/${POSTGRES_DB:-fluxion}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      RETENTION_ENABLED: ${RETENTION_ENABLED:-false}
+      RETENTION_POLL_INTERVAL_SECONDS: ${RETENTION_POLL_INTERVAL_SECONDS:-3600}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   redis-data:

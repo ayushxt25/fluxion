@@ -248,3 +248,17 @@ class WebhookDelivery(SDKModel):
 class WebhookDeliveryList(SDKModel):
     items: tuple[WebhookDelivery, ...]
     count: int
+
+
+class RetentionCategorySummary(SDKModel):
+    examined: int
+    eligible: int
+    deleted: int
+
+
+class RetentionSummary(SDKModel):
+    dry_run: bool
+    categories: dict[str, RetentionCategorySummary]
+    total_deleted: int
+    started_at: datetime
+    completed_at: datetime

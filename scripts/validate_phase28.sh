@@ -11,6 +11,7 @@ export JWT_SECRET="${JWT_SECRET:-phase28-validation-secret}"
 
 python -m pip install -q -r requirements-ci.txt -e .
 python -m pytest tests/integration/test_webhooks.py tests/integration/test_webhook_api.py tests/integration/test_webhook_delivery.py -v
+python -m pytest tests/test_retention_unit.py tests/test_sdk_retention_unit.py tests/integration/test_retention.py tests/integration/test_retention_api.py -v
 python -m pytest -m "not stress" -v
 python -m pytest -v
 python -m ruff check .
@@ -24,5 +25,7 @@ python -m venv "$validation_dir/venv"
 cd "$validation_dir"
 "$validation_dir/venv/bin/fluxion" --version
 "$validation_dir/venv/bin/fluxion-webhook" --help
+"$validation_dir/venv/bin/fluxion-retention" --help
 "$validation_dir/venv/bin/fluxion" webhook --help
-"$validation_dir/venv/bin/python" -c 'from app.sdk import FluxionClient, AsyncFluxionClient, verify_webhook_signature; import app.runtime.webhooks; print("SDK OK")'
+"$validation_dir/venv/bin/fluxion" retention --help
+"$validation_dir/venv/bin/python" -c 'from app.sdk import FluxionClient, AsyncFluxionClient, verify_webhook_signature; import app.runtime.retention, app.runtime.webhooks; print("SDK OK")'

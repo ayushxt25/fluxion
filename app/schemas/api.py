@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -211,3 +211,34 @@ class WebhookDeliveryResponse(BaseModel):
 class WebhookDeliveryListResponse(BaseModel):
     items: tuple[WebhookDeliveryResponse, ...]
     count: int
+
+
+class RetentionRunRequest(BaseModel):
+    categories: (
+        tuple[
+            Literal[
+                "task_logs",
+                "run_events",
+                "webhook_deliveries",
+                "dispatch_outbox",
+                "audit_events",
+                "workflow_runs",
+            ],
+            ...,
+        ]
+        | None
+    ) = None
+
+
+class RetentionCategorySummaryResponse(BaseModel):
+    examined: int
+    eligible: int
+    deleted: int
+
+
+class RetentionSummaryResponse(BaseModel):
+    dry_run: bool
+    categories: dict[str, RetentionCategorySummaryResponse]
+    total_deleted: int
+    started_at: datetime
+    completed_at: datetime
