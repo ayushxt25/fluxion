@@ -19,7 +19,11 @@ from app.db.models.execution import (
 )
 from app.db.models.logs import TaskLogRecord
 from app.db.models.webhooks import WebhookDeliveryRecord, WebhookSubscriptionRecord
-from app.db.models.workflow import TaskDefinitionRecord, WorkflowDefinitionRecord
+from app.db.models.workflow import (
+    TaskDefinitionRecord,
+    WorkflowDefinitionRecord,
+    WorkflowRevisionRecord,
+)
 from app.services.retention import RetentionRepository, RetentionService
 
 URL = os.environ.get("TEST_DATABASE_URL")
@@ -122,6 +126,32 @@ def test_ineligible_runs_are_retained(status, completed_at):
         summary = await retention(session).run_retention(categories=("workflow_runs",))
         assert summary.total_deleted == 0
         assert await session.get(WorkflowRunRecord, "retained") is not None
+
+    in_db(body)
+
+
+def test_retention_deletes_old_pinned_run_without_deleting_revisions():
+    async def body(session):
+        old = datetime.now(UTC) - timedelta(days=31)
+        await add_run(session, "old", completed_at=old)
+        async with session.begin():
+            session.add_all(
+                [
+                    WorkflowRevisionRecord(
+                        workflow_id="wf", revision=1, name="revision one"
+                    ),
+                    WorkflowRevisionRecord(
+                        workflow_id="wf", revision=2, name="revision two"
+                    ),
+                ]
+            )
+
+        summary = await retention(session).run_retention(categories=("workflow_runs",))
+
+        assert summary.total_deleted == 1
+        assert await session.get(WorkflowRunRecord, "old") is None
+        assert await session.get(WorkflowRevisionRecord, ("wf", 1)) is not None
+        assert await session.get(WorkflowRevisionRecord, ("wf", 2)) is not None
 
     in_db(body)
 

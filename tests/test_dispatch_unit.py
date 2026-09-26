@@ -10,6 +10,7 @@ from app.engine.exceptions import InvalidDispatchMessageError
 def message(task_id: str, attempt_number: int = 1) -> TaskDispatchMessage:
     return TaskDispatchMessage(
         workflow_id="workflow",
+        workflow_revision=7,
         run_id="run-1",
         task_id=task_id,
         attempt_number=attempt_number,
@@ -24,6 +25,7 @@ def test_dispatch_message_json_roundtrip() -> None:
     restored = TaskDispatchMessage.from_json(original.to_json())
 
     assert restored == original
+    assert restored.workflow_revision == 7
 
 
 def test_unsupported_version_rejected() -> None:

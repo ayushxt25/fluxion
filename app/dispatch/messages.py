@@ -8,6 +8,7 @@ class TaskDispatchMessage(BaseModel):
 
     version: int = Field(default=1)
     workflow_id: str
+    workflow_revision: int = Field(default=1, ge=1)
     run_id: str
     task_id: str
     attempt_number: int

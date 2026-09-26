@@ -112,7 +112,22 @@ class TaskWorker:
         self,
         message: TaskDispatchMessage,
     ) -> TaskWorkerResult:
-        workflow = await self._workflow_repository.get(message.workflow_id)
+        (
+            workflow_id,
+            workflow_revision,
+        ) = await self._run_repository.get_workflow_reference(message.run_id)
+        if (
+            workflow_id != message.workflow_id
+            or workflow_revision != message.workflow_revision
+        ):
+            raise DispatchStateError(
+                message.run_id,
+                message.task_id,
+                "dispatch workflow revision does not match durable run",
+            )
+        workflow = await self._workflow_repository.get_revision(
+            workflow_id, workflow_revision
+        )
         workflow_run = await self._run_repository.get(message.run_id, workflow)
         attempt = await self._load_and_validate(message, workflow, workflow_run)
         workflow_task = next(

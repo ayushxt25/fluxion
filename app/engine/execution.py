@@ -74,6 +74,7 @@ class WorkflowRun:
     ) -> None:
         self.run_id = run_id
         self.workflow_id = workflow.id
+        self.workflow_revision = workflow.revision
         self._dag = dag or WorkflowDAG(workflow)
         self._status = WorkflowStatus.PENDING
         self.workflow_input = clone_json_value(workflow_input)

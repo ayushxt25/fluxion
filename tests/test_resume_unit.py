@@ -42,7 +42,10 @@ class FakeWorkflowRepository:
     def __init__(self, definition: WorkflowDefinition) -> None:
         self.definition = definition
 
-    async def get(self, workflow_id: str) -> WorkflowDefinition:
+    async def get_revision(
+        self, workflow_id: str, revision: int
+    ) -> WorkflowDefinition:
+        assert revision == self.definition.revision
         return self.definition
 
 
@@ -58,8 +61,8 @@ class FakeRunRepository:
         self.save_count = 0
         self.saved_snapshots: list[dict[str, TaskStatus]] = []
 
-    async def get_workflow_id(self, run_id: str) -> str:
-        return self.workflow_run.workflow_id
+    async def get_workflow_reference(self, run_id: str) -> tuple[str, int]:
+        return self.workflow_run.workflow_id, self.workflow_run.workflow_revision
 
     async def get(self, run_id: str, workflow: WorkflowDefinition) -> WorkflowRun:
         return self.workflow_run
@@ -81,6 +84,7 @@ class FakeRunRepository:
             IncompleteWorkflowRunRef(
                 run_id=self.workflow_run.run_id,
                 workflow_id=self.workflow_run.workflow_id,
+                workflow_revision=self.workflow_run.workflow_revision,
             ),
         )
 

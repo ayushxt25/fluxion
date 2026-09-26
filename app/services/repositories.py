@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -17,6 +17,9 @@ from app.db.models.workflow import (
     TaskDefinitionRecord,
     TaskDependencyRecord,
     WorkflowDefinitionRecord,
+    WorkflowRevisionDependencyRecord,
+    WorkflowRevisionRecord,
+    WorkflowRevisionTaskRecord,
 )
 from app.dispatch.messages import TaskDispatchMessage
 from app.engine.dag import WorkflowDAG
@@ -42,6 +45,7 @@ from app.services.events import RunEventRepository
 class IncompleteWorkflowRunRef:
     run_id: str
     workflow_id: str
+    workflow_revision: int
 
 
 @dataclass(frozen=True)
@@ -79,6 +83,7 @@ class DispatchOutboxEvent:
 class WorkflowRunSummary:
     run_id: str
     workflow_id: str
+    workflow_revision: int
     status: WorkflowStatus
     created_at: datetime
 
@@ -159,6 +164,7 @@ class WorkflowRepository:
             workflow = WorkflowDefinition(
                 id=record.id,
                 name=record.name,
+                revision=record.revision,
                 tasks=tuple(
                     TaskDefinition(
                         id=task.task_id,
@@ -180,6 +186,162 @@ class WorkflowRepository:
 
         WorkflowDAG(workflow)
         return workflow
+
+    async def get_revision(self, workflow_id: str, revision: int) -> WorkflowDefinition:
+        async with self._session.begin():
+            return await self._load_revision(workflow_id, revision)
+
+    async def get_latest(self, workflow_id: str) -> WorkflowDefinition:
+        async with self._session.begin():
+            revision = await self._session.scalar(
+                select(WorkflowRevisionRecord.revision)
+                .where(WorkflowRevisionRecord.workflow_id == workflow_id)
+                .order_by(WorkflowRevisionRecord.revision.desc())
+                .limit(1)
+            )
+            if revision is None:
+                raise WorkflowNotFoundError(workflow_id)
+            return await self._load_revision(workflow_id, revision)
+
+    async def list_revisions(self, workflow_id: str) -> tuple[WorkflowDefinition, ...]:
+        async with self._session.begin():
+            revisions = tuple(
+                (
+                    await self._session.execute(
+                        select(WorkflowRevisionRecord.revision)
+                        .where(WorkflowRevisionRecord.workflow_id == workflow_id)
+                        .order_by(WorkflowRevisionRecord.revision)
+                    )
+                ).scalars()
+            )
+            if not revisions:
+                raise WorkflowNotFoundError(workflow_id)
+            return tuple(
+                [
+                    await self._load_revision(workflow_id, revision)
+                    for revision in revisions
+                ]
+            )
+
+    async def _load_revision(
+        self, workflow_id: str, revision: int
+    ) -> WorkflowDefinition:
+        record = await self._session.get(
+            WorkflowRevisionRecord, (workflow_id, revision)
+        )
+        if record is None:
+            raise WorkflowNotFoundError(f"{workflow_id}@{revision}")
+        tasks = tuple(
+            (
+                await self._session.execute(
+                    select(WorkflowRevisionTaskRecord)
+                    .where(
+                        WorkflowRevisionTaskRecord.workflow_id == workflow_id,
+                        WorkflowRevisionTaskRecord.revision == revision,
+                    )
+                    .order_by(WorkflowRevisionTaskRecord.task_id)
+                )
+            ).scalars()
+        )
+        edges = (
+            await self._session.execute(
+                select(WorkflowRevisionDependencyRecord).where(
+                    WorkflowRevisionDependencyRecord.workflow_id == workflow_id,
+                    WorkflowRevisionDependencyRecord.revision == revision,
+                )
+            )
+        ).scalars()
+        dependencies = {task.task_id: [] for task in tasks}
+        for edge in edges:
+            dependencies[edge.task_id].append(edge.depends_on_task_id)
+        workflow = WorkflowDefinition(
+            id=record.workflow_id,
+            name=record.name,
+            revision=record.revision,
+            tasks=tuple(
+                TaskDefinition(
+                    id=task.task_id,
+                    name=task.name,
+                    depends_on=tuple(sorted(dependencies[task.task_id])),
+                    retry_policy=RetryPolicy(
+                        max_attempts=task.retry_max_attempts,
+                        initial_backoff_seconds=task.retry_initial_backoff_seconds,
+                        backoff_multiplier=task.retry_backoff_multiplier,
+                        max_backoff_seconds=task.retry_max_backoff_seconds,
+                    ),
+                    parameters=task.parameters or {},
+                )
+                for task in tasks
+            ),
+        )
+        WorkflowDAG(workflow)
+        return workflow
+
+    async def publish(self, workflow: WorkflowDefinition) -> WorkflowDefinition:
+        """Append an immutable revision; PostgreSQL serializes same-ID publishers."""
+        WorkflowDAG(workflow)
+        try:
+            async with self._session.begin():
+                # hashtext is stable in PostgreSQL and the xact lock releases on commit.
+                await self._session.execute(
+                    text("SELECT pg_advisory_xact_lock(hashtext(:workflow_id))"),
+                    {"workflow_id": workflow.id},
+                )
+                current = await self._session.scalar(
+                    select(func.max(WorkflowRevisionRecord.revision)).where(
+                        WorkflowRevisionRecord.workflow_id == workflow.id
+                    )
+                )
+                revision = (current or 0) + 1
+                self._session.add(
+                    WorkflowRevisionRecord(
+                        workflow_id=workflow.id,
+                        revision=revision,
+                        name=workflow.name,
+                    )
+                )
+                self._session.add_all(
+                    [
+                        WorkflowRevisionTaskRecord(
+                            workflow_id=workflow.id,
+                            revision=revision,
+                            task_id=task.id,
+                            name=task.name,
+                            retry_max_attempts=task.retry_policy.max_attempts,
+                            retry_initial_backoff_seconds=(
+                                task.retry_policy.initial_backoff_seconds
+                            ),
+                            retry_backoff_multiplier=(
+                                task.retry_policy.backoff_multiplier
+                            ),
+                            retry_max_backoff_seconds=(
+                                task.retry_policy.max_backoff_seconds
+                            ),
+                            parameters={
+                                name: parameter.model_dump(mode="json")
+                                for name, parameter in task.parameters.items()
+                            },
+                        )
+                        for task in workflow.tasks
+                    ]
+                )
+                self._session.add_all(
+                    [
+                        WorkflowRevisionDependencyRecord(
+                            workflow_id=workflow.id,
+                            revision=revision,
+                            task_id=task.id,
+                            depends_on_task_id=dependency,
+                        )
+                        for task in workflow.tasks
+                        for dependency in task.depends_on
+                    ]
+                )
+            return await self.get_revision(workflow.id, revision)
+        except IntegrityError as exc:
+            raise PersistenceError(
+                f"Failed to publish workflow revision for '{workflow.id}'."
+            ) from exc
 
     async def exists(self, workflow_id: str) -> bool:
         async with self._session.begin():
@@ -224,6 +386,7 @@ class WorkflowRepository:
                 WorkflowDefinition(
                     id=record.id,
                     name=record.name,
+                    revision=record.revision,
                     tasks=tuple(
                         TaskDefinition(
                             id=task.task_id,
@@ -264,6 +427,7 @@ class WorkflowRunRepository:
                 record = WorkflowRunRecord(
                     run_id=workflow_run.run_id,
                     workflow_id=workflow_run.workflow_id,
+                    workflow_revision=workflow_run.workflow_revision,
                     status=workflow_run.status.value,
                     input=workflow_run.workflow_input,
                     input_present=workflow_run.workflow_input_present,
@@ -348,7 +512,7 @@ class WorkflowRunRepository:
                 ) from exc
 
             try:
-                return WorkflowRun.restore(
+                workflow_run = WorkflowRun.restore(
                     run_id=record.run_id,
                     workflow=workflow,
                     status=workflow_status,
@@ -360,6 +524,8 @@ class WorkflowRunRepository:
                     workflow_input=record.input,
                     workflow_input_present=record.input_present,
                 )
+                workflow_run.workflow_revision = record.workflow_revision
+                return workflow_run
             except UnknownTaskRunError as exc:
                 raise RecoveryStateError(
                     run_id,
@@ -381,6 +547,7 @@ class WorkflowRunRepository:
                 IncompleteWorkflowRunRef(
                     run_id=record.run_id,
                     workflow_id=record.workflow_id,
+                    workflow_revision=record.workflow_revision,
                 )
                 for record in result.scalars()
             )
@@ -397,6 +564,13 @@ class WorkflowRunRepository:
                 raise WorkflowRunNotFoundError(run_id)
             return workflow_id
 
+    async def get_workflow_reference(self, run_id: str) -> tuple[str, int]:
+        async with self._session.begin():
+            row = await self._session.get(WorkflowRunRecord, run_id)
+            if row is None:
+                raise WorkflowRunNotFoundError(run_id)
+            return row.workflow_id, row.workflow_revision
+
     async def get_summary(self, run_id: str) -> WorkflowRunSummary:
         async with self._session.begin():
             record = await self._session.get(WorkflowRunRecord, run_id)
@@ -405,6 +579,7 @@ class WorkflowRunRepository:
             return WorkflowRunSummary(
                 run_id=record.run_id,
                 workflow_id=record.workflow_id,
+                workflow_revision=record.workflow_revision,
                 status=WorkflowStatus(record.status),
                 created_at=record.created_at,
             )
@@ -435,6 +610,7 @@ class WorkflowRunRepository:
                 WorkflowRunSummary(
                     run_id=record.run_id,
                     workflow_id=record.workflow_id,
+                    workflow_revision=record.workflow_revision,
                     status=WorkflowStatus(record.status),
                     created_at=record.created_at,
                 )

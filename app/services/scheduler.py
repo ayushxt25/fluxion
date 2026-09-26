@@ -80,8 +80,13 @@ class WorkflowScheduler:
         if max_dispatch is not None and max_dispatch <= 0:
             raise InvalidConcurrencyLimitError(max_dispatch)
 
-        workflow_id = await self._run_repository.get_workflow_id(run_id)
-        workflow = await self._workflow_repository.get(workflow_id)
+        (
+            workflow_id,
+            workflow_revision,
+        ) = await self._run_repository.get_workflow_reference(run_id)
+        workflow = await self._workflow_repository.get_revision(
+            workflow_id, workflow_revision
+        )
         workflow_run = await self._run_repository.get(run_id, workflow)
         await self._promote_due_retries(workflow_run)
 
@@ -122,6 +127,7 @@ class WorkflowScheduler:
             )
             message = TaskDispatchMessage(
                 workflow_id=workflow_id,
+                workflow_revision=workflow_revision,
                 run_id=run_id,
                 task_id=task_id,
                 attempt_number=attempt_number,

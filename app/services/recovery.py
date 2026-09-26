@@ -66,6 +66,7 @@ class WorkflowRecoveryService:
                 await self.recover_run(
                     run_id=run_ref.run_id,
                     workflow_id=run_ref.workflow_id,
+                    workflow_revision=run_ref.workflow_revision,
                 )
             )
         return tuple(results)
@@ -74,8 +75,11 @@ class WorkflowRecoveryService:
         self,
         run_id: str,
         workflow_id: str,
+        workflow_revision: int = 1,
     ) -> WorkflowRecoveryResult:
-        workflow = await self._workflow_repository.get(workflow_id)
+        workflow = await self._workflow_repository.get_revision(
+            workflow_id, workflow_revision
+        )
         workflow_run = await self._run_repository.get(run_id, workflow)
         previous_status = workflow_run.status
         now = datetime.now(UTC)

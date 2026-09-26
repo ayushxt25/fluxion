@@ -55,10 +55,15 @@ class WorkflowRunManagementService:
         self,
         workflow_id: str,
         run_id: str | None = None,
+        workflow_revision: int | None = None,
         workflow_input: object = None,
         workflow_input_present: bool = False,
     ) -> WorkflowRunResponse:
-        workflow = await self._workflow_repository.get(workflow_id)
+        workflow = (
+            await self._workflow_repository.get_revision(workflow_id, workflow_revision)
+            if workflow_revision is not None
+            else await self._workflow_repository.get_latest(workflow_id)
+        )
         normalized_input: JSONValue = None
         if workflow_input_present:
             normalized_input = normalize_workflow_input(
@@ -76,8 +81,13 @@ class WorkflowRunManagementService:
         return await self.get_run(workflow_run.run_id)
 
     async def get_run(self, run_id: str) -> WorkflowRunResponse:
-        workflow_id = await self._run_repository.get_workflow_id(run_id)
-        workflow = await self._workflow_repository.get(workflow_id)
+        (
+            workflow_id,
+            workflow_revision,
+        ) = await self._run_repository.get_workflow_reference(run_id)
+        workflow = await self._workflow_repository.get_revision(
+            workflow_id, workflow_revision
+        )
         workflow_run = await self._run_repository.get(run_id, workflow)
         summary = await self._run_repository.get_summary(run_id)
         attempts = await self._attempt_repository.list_run_attempts(run_id)
@@ -124,8 +134,13 @@ class WorkflowRunManagementService:
         )
 
     async def cancel_run(self, run_id: str) -> WorkflowRunResponse:
-        workflow_id = await self._run_repository.get_workflow_id(run_id)
-        workflow = await self._workflow_repository.get(workflow_id)
+        (
+            workflow_id,
+            workflow_revision,
+        ) = await self._run_repository.get_workflow_reference(run_id)
+        workflow = await self._workflow_repository.get_revision(
+            workflow_id, workflow_revision
+        )
         workflow_run = await self._run_repository.get(run_id, workflow)
         if workflow_run.status == WorkflowStatus.CANCELLED:
             return await self.get_run(run_id)
@@ -147,12 +162,15 @@ class WorkflowRunManagementService:
         return await self.get_run(run_id)
 
     async def recover_run(self, run_id: str) -> RecoveryResponse:
-        workflow_id = await self._run_repository.get_workflow_id(run_id)
+        (
+            workflow_id,
+            workflow_revision,
+        ) = await self._run_repository.get_workflow_reference(run_id)
         result = await WorkflowRecoveryService(
             self._workflow_repository,
             self._run_repository,
             self._attempt_repository,
-        ).recover_run(run_id, workflow_id)
+        ).recover_run(run_id, workflow_id, workflow_revision)
         return _recovery_response(result)
 
     async def continue_run(self, run_id: str) -> WorkflowRunResponse:

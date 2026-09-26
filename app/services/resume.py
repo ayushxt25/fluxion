@@ -52,8 +52,13 @@ class WorkflowResumeService:
             if isinstance(task_registry, TaskRegistry)
             else TaskRegistry(task_registry)
         )
-        workflow_id = await self._run_repository.get_workflow_id(run_id)
-        recovery_result = await self._recovery.recover_run(run_id, workflow_id)
+        (
+            workflow_id,
+            workflow_revision,
+        ) = await self._run_repository.get_workflow_reference(run_id)
+        recovery_result = await self._recovery.recover_run(
+            run_id, workflow_id, workflow_revision
+        )
         if not recovery_result.resumable:
             raise WorkflowRunNotResumableError(
                 run_id,
@@ -61,7 +66,9 @@ class WorkflowResumeService:
                 f"interrupted={recovery_result.interrupted_task_ids}",
             )
 
-        workflow = await self._workflow_repository.get(workflow_id)
+        workflow = await self._workflow_repository.get_revision(
+            workflow_id, workflow_revision
+        )
         workflow_run = await self._run_repository.get(run_id, workflow)
         tasks_by_id = {task.id: task for task in workflow.tasks}
         for task_id, task_run in workflow_run.task_runs.items():

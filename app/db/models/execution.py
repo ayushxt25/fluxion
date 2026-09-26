@@ -30,6 +30,7 @@ class WorkflowRunRecord(Base):
         ForeignKey("workflow_definitions.id", ondelete="RESTRICT"),
         nullable=False,
     )
+    workflow_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

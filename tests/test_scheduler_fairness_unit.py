@@ -62,14 +62,15 @@ def test_scheduler_enforces_per_run_cap_and_queue_backpressure() -> None:
     workflow_run = WorkflowRun.create("run-1", definition)
 
     class WorkflowRepository:
-        async def get(self, workflow_id: str):
+        async def get_revision(self, workflow_id: str, revision: int):
             assert workflow_id == "workflow"
+            assert revision == 1
             return definition
 
     class RunRepository:
-        async def get_workflow_id(self, run_id: str):
+        async def get_workflow_reference(self, run_id: str):
             assert run_id == "run-1"
-            return "workflow"
+            return "workflow", 1
 
         async def get(self, run_id: str, workflow):
             return workflow_run
@@ -137,4 +138,5 @@ def test_scheduler_enforces_per_run_cap_and_queue_backpressure() -> None:
     assert workflow_run.get_task_status("a") == TaskStatus.DISPATCHED
     assert workflow_run.get_task_status("b") == TaskStatus.DISPATCHED
     assert workflow_run.get_task_status("c") == TaskStatus.READY
+    assert all(message.workflow_revision == 1 for message in summary.messages)
     assert blocked.dispatched_task_ids == ()

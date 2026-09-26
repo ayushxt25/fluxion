@@ -41,7 +41,13 @@ class LeaseReaper:
         expired = await self._attempt_repository.list_expired_running_attempts(now)
         results = []
         for attempt_ref in expired:
-            workflow = await self._workflow_repository.get(attempt_ref.workflow_id)
+            (
+                workflow_id,
+                workflow_revision,
+            ) = await self._run_repository.get_workflow_reference(attempt_ref.run_id)
+            workflow = await self._workflow_repository.get_revision(
+                workflow_id, workflow_revision
+            )
             workflow_run = await self._run_repository.get(attempt_ref.run_id, workflow)
             workflow_run.interrupt_tasks_for_recovery((attempt_ref.task_id,))
             reclaimed = await self._attempt_repository.reclaim_expired_attempt(

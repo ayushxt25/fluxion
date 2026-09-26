@@ -7,6 +7,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Integer,
     String,
+    UniqueConstraint,
     func,
     text,
 )
@@ -20,6 +21,7 @@ class WorkflowDefinitionRecord(Base):
     __tablename__ = "workflow_definitions"
 
     id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -42,6 +44,7 @@ class TaskDefinitionRecord(Base):
         ForeignKey("workflow_definitions.id", ondelete="RESTRICT"),
         primary_key=True,
     )
+    workflow_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     task_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     retry_max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -82,5 +85,66 @@ class TaskDependencyRecord(Base):
     )
 
     workflow_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    workflow_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    task_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    depends_on_task_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+
+
+class WorkflowRevisionRecord(Base):
+    __tablename__ = "workflow_revisions"
+    __table_args__ = (UniqueConstraint("workflow_id", "revision"),)
+
+    workflow_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class WorkflowRevisionTaskRecord(Base):
+    __tablename__ = "workflow_revision_tasks"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["workflow_id", "revision"],
+            ["workflow_revisions.workflow_id", "workflow_revisions.revision"],
+            ondelete="RESTRICT",
+        ),
+    )
+    workflow_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    name: Mapped[str | None] = mapped_column(String(255))
+    retry_max_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    retry_initial_backoff_seconds: Mapped[float] = mapped_column(Float, nullable=False)
+    retry_backoff_multiplier: Mapped[float] = mapped_column(Float, nullable=False)
+    retry_max_backoff_seconds: Mapped[float | None] = mapped_column(Float)
+    parameters: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+
+class WorkflowRevisionDependencyRecord(Base):
+    __tablename__ = "workflow_revision_dependencies"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["workflow_id", "revision", "task_id"],
+            [
+                "workflow_revision_tasks.workflow_id",
+                "workflow_revision_tasks.revision",
+                "workflow_revision_tasks.task_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["workflow_id", "revision", "depends_on_task_id"],
+            [
+                "workflow_revision_tasks.workflow_id",
+                "workflow_revision_tasks.revision",
+                "workflow_revision_tasks.task_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+    )
+    workflow_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True)
     task_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     depends_on_task_id: Mapped[str] = mapped_column(String(255), primary_key=True)

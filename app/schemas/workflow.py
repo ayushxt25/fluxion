@@ -82,6 +82,7 @@ class WorkflowDefinition(BaseModel):
     id: str
     name: str
     tasks: tuple[TaskDefinition, ...]
+    revision: int = Field(default=1, ge=1)
 
     model_config = ConfigDict(frozen=True)
 

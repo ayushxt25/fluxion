@@ -35,7 +35,10 @@ class FakeWorkflowRepository:
     def __init__(self, definition: WorkflowDefinition) -> None:
         self.definition = definition
 
-    async def get(self, workflow_id: str) -> WorkflowDefinition:
+    async def get_revision(
+        self, workflow_id: str, revision: int
+    ) -> WorkflowDefinition:
+        assert revision == self.definition.revision
         return self.definition
 
 
@@ -55,6 +58,7 @@ class FakeRunRepository:
             IncompleteWorkflowRunRef(
                 run_id=self.workflow_run.run_id,
                 workflow_id=self.workflow_run.workflow_id,
+                workflow_revision=self.workflow_run.workflow_revision,
             ),
         )
 
