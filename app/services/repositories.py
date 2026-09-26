@@ -100,10 +100,15 @@ class WorkflowRepository:
                 if await self._session.get(WorkflowDefinitionRecord, workflow.id):
                     raise WorkflowAlreadyExistsError(workflow.id)
 
-                record = WorkflowDefinitionRecord(id=workflow.id, name=workflow.name)
+                record = WorkflowDefinitionRecord(
+                    id=workflow.id,
+                    revision=1,
+                    name=workflow.name,
+                )
                 record.tasks = [
                     TaskDefinitionRecord(
                         workflow_id=workflow.id,
+                        workflow_revision=1,
                         task_id=task.id,
                         name=task.name,
                         retry_max_attempts=task.retry_policy.max_attempts,
@@ -127,6 +132,7 @@ class WorkflowRepository:
                 dependencies = [
                     TaskDependencyRecord(
                         workflow_id=workflow.id,
+                        workflow_revision=1,
                         task_id=task.id,
                         depends_on_task_id=dependency_id,
                     )
@@ -134,6 +140,15 @@ class WorkflowRepository:
                     for dependency_id in task.depends_on
                 ]
                 self._session.add_all(dependencies)
+                self._session.add(
+                    WorkflowRevisionRecord(
+                        workflow_id=workflow.id,
+                        revision=1,
+                        name=workflow.name,
+                    )
+                )
+                self._session.add_all(self._revision_task_rows(workflow, 1))
+                self._session.add_all(self._revision_dependency_rows(workflow, 1))
         except IntegrityError as exc:
             raise PersistenceError(
                 f"Failed to persist workflow '{workflow.id}'."
@@ -300,48 +315,54 @@ class WorkflowRepository:
                         name=workflow.name,
                     )
                 )
+                self._session.add_all(self._revision_task_rows(workflow, revision))
                 self._session.add_all(
-                    [
-                        WorkflowRevisionTaskRecord(
-                            workflow_id=workflow.id,
-                            revision=revision,
-                            task_id=task.id,
-                            name=task.name,
-                            retry_max_attempts=task.retry_policy.max_attempts,
-                            retry_initial_backoff_seconds=(
-                                task.retry_policy.initial_backoff_seconds
-                            ),
-                            retry_backoff_multiplier=(
-                                task.retry_policy.backoff_multiplier
-                            ),
-                            retry_max_backoff_seconds=(
-                                task.retry_policy.max_backoff_seconds
-                            ),
-                            parameters={
-                                name: parameter.model_dump(mode="json")
-                                for name, parameter in task.parameters.items()
-                            },
-                        )
-                        for task in workflow.tasks
-                    ]
-                )
-                self._session.add_all(
-                    [
-                        WorkflowRevisionDependencyRecord(
-                            workflow_id=workflow.id,
-                            revision=revision,
-                            task_id=task.id,
-                            depends_on_task_id=dependency,
-                        )
-                        for task in workflow.tasks
-                        for dependency in task.depends_on
-                    ]
+                    self._revision_dependency_rows(workflow, revision)
                 )
             return await self.get_revision(workflow.id, revision)
         except IntegrityError as exc:
             raise PersistenceError(
                 f"Failed to publish workflow revision for '{workflow.id}'."
             ) from exc
+
+    @staticmethod
+    def _revision_task_rows(
+        workflow: WorkflowDefinition, revision: int
+    ) -> list[WorkflowRevisionTaskRecord]:
+        return [
+            WorkflowRevisionTaskRecord(
+                workflow_id=workflow.id,
+                revision=revision,
+                task_id=task.id,
+                name=task.name,
+                retry_max_attempts=task.retry_policy.max_attempts,
+                retry_initial_backoff_seconds=(
+                    task.retry_policy.initial_backoff_seconds
+                ),
+                retry_backoff_multiplier=task.retry_policy.backoff_multiplier,
+                retry_max_backoff_seconds=task.retry_policy.max_backoff_seconds,
+                parameters={
+                    name: parameter.model_dump(mode="json")
+                    for name, parameter in task.parameters.items()
+                },
+            )
+            for task in workflow.tasks
+        ]
+
+    @staticmethod
+    def _revision_dependency_rows(
+        workflow: WorkflowDefinition, revision: int
+    ) -> list[WorkflowRevisionDependencyRecord]:
+        return [
+            WorkflowRevisionDependencyRecord(
+                workflow_id=workflow.id,
+                revision=revision,
+                task_id=task.id,
+                depends_on_task_id=dependency,
+            )
+            for task in workflow.tasks
+            for dependency in task.depends_on
+        ]
 
     async def exists(self, workflow_id: str) -> bool:
         async with self._session.begin():

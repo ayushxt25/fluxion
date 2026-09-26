@@ -37,9 +37,14 @@ def _message(*, revision: int) -> TaskDispatchMessage:
 
 
 def test_workflow_run_captures_definition_revision() -> None:
-    workflow = WorkflowDefinition(id="workflow", name="workflow", revision=7)
+    workflow = WorkflowDefinition(
+        id="workflow",
+        name="workflow",
+        revision=7,
+        tasks=(TaskDefinition(id="task"),),
+    )
 
-    run = WorkflowRun.create(workflow, run_id="run-1")
+    run = WorkflowRun.create("run-1", workflow)
 
     assert run.workflow_revision == 7
 

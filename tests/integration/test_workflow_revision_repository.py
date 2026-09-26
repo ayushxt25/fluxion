@@ -6,7 +6,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db import models  # noqa: F401
 from app.db.base import Base
-from app.engine.exceptions import WorkflowNotFoundError
+from app.db.models.workflow import WorkflowDefinitionRecord, WorkflowRevisionRecord
+from app.engine.exceptions import WorkflowAlreadyExistsError, WorkflowNotFoundError
 from app.schemas.workflow import (
     DependencyResultParameter,
     LiteralParameter,
@@ -35,7 +36,11 @@ def workflow(workflow_id: str = "revision-workflow") -> WorkflowDefinition:
             TaskDefinition(
                 id="prepare",
                 retry_policy=RetryPolicy(max_attempts=3, initial_backoff_seconds=2),
-                parameters={"source": WorkflowInputParameter(path=("source",))},
+                parameters={
+                    "source": WorkflowInputParameter(
+                        source="workflow_input", path=("source",)
+                    )
+                },
             ),
             TaskDefinition(
                 id="process",
@@ -81,6 +86,49 @@ def test_revision_publish_reads_fidelity_and_immutability():
         ] == [1, 2, 3]
         with pytest.raises(WorkflowNotFoundError):
             await repository.get_revision(original.id, 99)
+
+    in_db(body)
+
+
+def test_save_seeds_immutable_revision_one_with_full_fidelity():
+    async def body(session):
+        repository = WorkflowRepository(session)
+        original = workflow()
+
+        await repository.save(original)
+
+        assert await repository.get(original.id) == original
+        assert await repository.get_revision(original.id, 1) == original
+        assert (await repository.get_latest(original.id)).revision == 1
+        assert (await repository.publish(original)).revision == 2
+        with pytest.raises(WorkflowAlreadyExistsError):
+            await repository.save(original)
+
+    in_db(body)
+
+
+def test_failed_save_rolls_back_legacy_and_immutable_revision_one(monkeypatch):
+    async def body(session):
+        repository = WorkflowRepository(session)
+        original_add_all = session.add_all
+        add_all_calls = 0
+
+        def fail_revision_tasks(rows):
+            nonlocal add_all_calls
+            add_all_calls += 1
+            if add_all_calls == 2:
+                raise RuntimeError("simulated immutable child failure")
+            original_add_all(rows)
+
+        monkeypatch.setattr(session, "add_all", fail_revision_tasks)
+        with pytest.raises(RuntimeError, match="immutable child failure"):
+            await repository.save(workflow())
+        monkeypatch.setattr(session, "add_all", original_add_all)
+
+        assert await session.get(WorkflowDefinitionRecord, "revision-workflow") is None
+        assert (
+            await session.get(WorkflowRevisionRecord, ("revision-workflow", 1))
+        ) is None
 
     in_db(body)
 
