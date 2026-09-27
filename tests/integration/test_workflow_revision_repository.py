@@ -194,8 +194,9 @@ def test_new_and_existing_runs_remain_pinned_to_immutable_revisions():
         workflow_repository = WorkflowRepository(session)
         # The legacy row remains the transitional FK anchor until Phase 30A's
         # storage cutover; immutable publishing itself is append-only.
-        await workflow_repository.save(workflow())
-        first = await workflow_repository.publish(workflow())
+        original = workflow()
+        await workflow_repository.save(original)
+        first = await workflow_repository.get_revision(original.id, 1)
         service = WorkflowRunManagementService(
             workflow_repository,
             WorkflowRunRepository(session),
@@ -203,10 +204,10 @@ def test_new_and_existing_runs_remain_pinned_to_immutable_revisions():
         )
         await service.create_run(first.id, run_id="latest-one")
         second = await workflow_repository.publish(
-            workflow().model_copy(
+            original.model_copy(
                 update={
                     "name": "Revision two",
-                    "tasks": (workflow().tasks[0],),
+                    "tasks": (original.tasks[0],),
                 }
             )
         )
