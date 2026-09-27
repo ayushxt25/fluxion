@@ -180,7 +180,13 @@ async def test_workflow_create_publish_and_revision_reads() -> None:
             json=workflow_payload(),
             headers=auth_headers(Role.OPERATOR),
         )
+        second_workflow = await client.post(
+            "/api/v1/workflows",
+            json=workflow_payload("wf-api-second"),
+            headers=auth_headers(Role.OPERATOR),
+        )
         assert published.status_code == 201
+        assert second_workflow.status_code == 201
         assert response.json()["revision"] == 1
         assert published.json()["revision"] == 2
 
@@ -190,6 +196,10 @@ async def test_workflow_create_publish_and_revision_reads() -> None:
         )
         listed = await client.get(
             "/api/v1/workflows?limit=10&offset=0",
+            headers=auth_headers(Role.VIEWER),
+        )
+        paged = await client.get(
+            "/api/v1/workflows?limit=1&offset=1",
             headers=auth_headers(Role.VIEWER),
         )
         missing = await client.get(
@@ -232,7 +242,12 @@ async def test_workflow_create_publish_and_revision_reads() -> None:
         assert latest_run.json()["workflow_revision"] == 2
         assert pinned_run.json()["workflow_revision"] == 1
         assert listed.status_code == 200
-        assert [item["id"] for item in listed.json()["items"]] == ["wf-api"]
+        assert [item["id"] for item in listed.json()["items"]] == [
+            "wf-api",
+            "wf-api-second",
+        ]
+        assert [item["revision"] for item in listed.json()["items"]] == [2, 1]
+        assert [item["id"] for item in paged.json()["items"]] == ["wf-api-second"]
         assert missing.status_code == 404
 
 

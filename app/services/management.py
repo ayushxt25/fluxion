@@ -40,7 +40,10 @@ class WorkflowManagementService:
 
     async def list(self, limit: int, offset: int) -> tuple[WorkflowDefinition, ...]:
         legacy = await self._repository.list(limit=limit, offset=offset)
-        return tuple(await self._repository.get_latest(item.id) for item in legacy)
+        latest: list[WorkflowDefinition] = []
+        for item in legacy:
+            latest.append(await self._repository.get_latest(item.id))
+        return tuple(latest)
 
 
 class WorkflowRunManagementService:
