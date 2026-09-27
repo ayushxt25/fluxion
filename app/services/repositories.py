@@ -147,7 +147,9 @@ class WorkflowRepository:
                         name=workflow.name,
                     )
                 )
+                await self._session.flush()
                 self._session.add_all(self._revision_task_rows(workflow, 1))
+                await self._session.flush()
                 self._session.add_all(self._revision_dependency_rows(workflow, 1))
         except IntegrityError as exc:
             raise PersistenceError(
@@ -315,7 +317,9 @@ class WorkflowRepository:
                         name=workflow.name,
                     )
                 )
+                await self._session.flush()
                 self._session.add_all(self._revision_task_rows(workflow, revision))
+                await self._session.flush()
                 self._session.add_all(
                     self._revision_dependency_rows(workflow, revision)
                 )

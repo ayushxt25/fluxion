@@ -207,74 +207,80 @@ class TaskWorker:
                 record_task_log_validation_failed()
             error = f"{type(exc).__name__}: {exc}"
 
-        await log_flusher.close()
+        try:
+            await log_flusher.close()
 
-        if error is None:
-            workflow_run.complete_task(message.task_id, result=result)
-            await self._attempt_repository.finish_leased_attempt(
-                workflow_run,
-                running_attempt,
-                AttemptStatus.SUCCEEDED,
-                datetime.now(UTC),
-            )
-            attempt_status = AttemptStatus.SUCCEEDED
-            record_task_attempt_succeeded(time.perf_counter() - started)
-            logger.info(
-                "Task attempt succeeded.",
-                extra={
-                    "event": "task.success",
-                    "workflow_id": message.workflow_id,
-                    "run_id": message.run_id,
-                    "task_id": message.task_id,
-                    "attempt_number": message.attempt_number,
-                    "worker_id": self.worker_id,
-                },
-            )
-        else:
-            retry_at = self._retry_time(
-                workflow,
-                message.task_id,
-                message.attempt_number,
-            )
-            error_type, _, error_message = error.partition(": ")
-            if retry_at is None:
-                workflow_run.fail_task(message.task_id)
+            if error is None:
+                workflow_run.complete_task(message.task_id, result=result)
+                await self._attempt_repository.finish_leased_attempt(
+                    workflow_run,
+                    running_attempt,
+                    AttemptStatus.SUCCEEDED,
+                    datetime.now(UTC),
+                )
+                attempt_status = AttemptStatus.SUCCEEDED
+                record_task_attempt_succeeded(time.perf_counter() - started)
+                logger.info(
+                    "Task attempt succeeded.",
+                    extra={
+                        "event": "task.success",
+                        "workflow_id": message.workflow_id,
+                        "run_id": message.run_id,
+                        "task_id": message.task_id,
+                        "attempt_number": message.attempt_number,
+                        "worker_id": self.worker_id,
+                    },
+                )
             else:
-                workflow_run.schedule_retry(message.task_id, retry_at)
-                record_task_retry()
-            await self._attempt_repository.finish_leased_attempt(
-                workflow_run,
-                running_attempt,
-                AttemptStatus.FAILED,
-                datetime.now(UTC),
-                error_type=error_type,
-                error_message=error_message,
-            )
-            attempt_status = AttemptStatus.FAILED
-            record_task_attempt_failed(time.perf_counter() - started)
-            logger.warning(
-                "Task attempt failed.",
-                extra={
-                    "event": "task.failure",
-                    "workflow_id": message.workflow_id,
-                    "run_id": message.run_id,
-                    "task_id": message.task_id,
-                    "attempt_number": message.attempt_number,
-                    "worker_id": self.worker_id,
-                    "retry_scheduled": retry_at is not None,
-                },
-            )
+                retry_at = self._retry_time(
+                    workflow,
+                    message.task_id,
+                    message.attempt_number,
+                )
+                error_type, _, error_message = error.partition(": ")
+                if retry_at is None:
+                    workflow_run.fail_task(message.task_id)
+                else:
+                    workflow_run.schedule_retry(message.task_id, retry_at)
+                    record_task_retry()
+                await self._attempt_repository.finish_leased_attempt(
+                    workflow_run,
+                    running_attempt,
+                    AttemptStatus.FAILED,
+                    datetime.now(UTC),
+                    error_type=error_type,
+                    error_message=error_message,
+                )
+                attempt_status = AttemptStatus.FAILED
+                record_task_attempt_failed(time.perf_counter() - started)
+                logger.warning(
+                    "Task attempt failed.",
+                    extra={
+                        "event": "task.failure",
+                        "workflow_id": message.workflow_id,
+                        "run_id": message.run_id,
+                        "task_id": message.task_id,
+                        "attempt_number": message.attempt_number,
+                        "worker_id": self.worker_id,
+                        "retry_scheduled": retry_at is not None,
+                    },
+                )
 
-        return TaskWorkerResult(
-            run_id=message.run_id,
-            workflow_id=message.workflow_id,
-            task_id=message.task_id,
-            attempt_number=message.attempt_number,
-            attempt_key=message.attempt_key,
-            attempt_status=attempt_status,
-            task_status=workflow_run.get_task_status(message.task_id),
-            workflow_status=workflow_run.status,
-        )
+            return TaskWorkerResult(
+                run_id=message.run_id,
+                workflow_id=message.workflow_id,
+                task_id=message.task_id,
+                attempt_number=message.attempt_number,
+                attempt_key=message.attempt_key,
+                attempt_status=attempt_status,
+                task_status=workflow_run.get_task_status(message.task_id),
+                workflow_status=workflow_run.status,
+            )
+        except asyncio.CancelledError:
+            # Cancellation can arrive after a callable returns but before its
+            # durable completion update; balance the claim's active gauge.
+            record_task_attempt_abandoned()
+            raise
 
     async def _load_and_validate(
         self,

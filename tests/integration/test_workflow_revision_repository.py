@@ -46,7 +46,9 @@ def workflow(workflow_id: str = "revision-workflow") -> WorkflowDefinition:
                 id="process",
                 depends_on=("prepare",),
                 parameters={
-                    "previous": DependencyResultParameter(task_id="prepare"),
+                    "previous": DependencyResultParameter(
+                        source="dependency_result", task_id="prepare"
+                    ),
                     "constant": LiteralParameter(value={"mode": "safe"}),
                 },
             ),
