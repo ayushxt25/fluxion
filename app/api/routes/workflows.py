@@ -13,6 +13,7 @@ from app.api.pagination import LimitQuery, OffsetQuery
 from app.schemas.api import (
     CreateWorkflowRunRequest,
     WorkflowListResponse,
+    WorkflowRevisionDiff,
     WorkflowRevisionSummary,
     WorkflowRunResponse,
 )
@@ -60,7 +61,11 @@ async def create_workflow(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: Annotated[Principal, Depends(get_current_principal)],
 ) -> WorkflowDefinition:
-    created = await _workflow_service(session).create(workflow)
+    created = await _workflow_service(session).create(
+        workflow,
+        created_by_subject=principal.subject,
+        created_by_role=principal.role.value,
+    )
     await AuditService(AuditEventRepository(session)).record_success(
         request_id=getattr(request.state, "request_id", ""),
         principal=principal,
@@ -105,7 +110,12 @@ async def list_workflow_revisions(
     revisions = await WorkflowRepository(session).list_revisions(workflow_id)
     return tuple(
         WorkflowRevisionSummary(
-            workflow_id=item.id, revision=item.revision, name=item.name
+            workflow_id=item.id,
+            revision=item.revision,
+            name=item.name,
+            created_at=item.created_at,
+            created_by_subject=item.created_by_subject,
+            created_by_role=item.created_by_role,
         )
         for item in revisions
     )
@@ -123,6 +133,23 @@ async def get_workflow_revision(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> WorkflowDefinition:
     return await WorkflowRepository(session).get_revision(workflow_id, revision)
+
+
+@router.get(
+    "/{workflow_id}/revisions/{from_revision}/diff/{to_revision}",
+    response_model=WorkflowRevisionDiff,
+    summary="Compare immutable workflow revisions",
+    dependencies=[Depends(require_role(Role.VIEWER)), Depends(require_rate_limit())],
+)
+async def diff_workflow_revisions(
+    workflow_id: str,
+    from_revision: int,
+    to_revision: int,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> WorkflowRevisionDiff:
+    return await _workflow_service(session).compare_revisions(
+        workflow_id, from_revision, to_revision
+    )
 
 
 @router.get(

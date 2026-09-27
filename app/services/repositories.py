@@ -92,7 +92,13 @@ class WorkflowRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def save(self, workflow: WorkflowDefinition) -> None:
+    async def save(
+        self,
+        workflow: WorkflowDefinition,
+        *,
+        created_by_subject: str | None = None,
+        created_by_role: str | None = None,
+    ) -> None:
         WorkflowDAG(workflow)
 
         try:
@@ -145,6 +151,8 @@ class WorkflowRepository:
                         workflow_id=workflow.id,
                         revision=1,
                         name=workflow.name,
+                        created_by_subject=created_by_subject,
+                        created_by_role=created_by_role,
                     )
                 )
                 await self._session.flush()
@@ -275,6 +283,9 @@ class WorkflowRepository:
             id=record.workflow_id,
             name=record.name,
             revision=record.revision,
+            created_at=record.created_at,
+            created_by_subject=record.created_by_subject,
+            created_by_role=record.created_by_role,
             tasks=tuple(
                 TaskDefinition(
                     id=task.task_id,
@@ -294,7 +305,13 @@ class WorkflowRepository:
         WorkflowDAG(workflow)
         return workflow
 
-    async def publish(self, workflow: WorkflowDefinition) -> WorkflowDefinition:
+    async def publish(
+        self,
+        workflow: WorkflowDefinition,
+        *,
+        created_by_subject: str | None = None,
+        created_by_role: str | None = None,
+    ) -> WorkflowDefinition:
         """Append an immutable revision; PostgreSQL serializes same-ID publishers."""
         WorkflowDAG(workflow)
         try:
@@ -315,6 +332,8 @@ class WorkflowRepository:
                         workflow_id=workflow.id,
                         revision=revision,
                         name=workflow.name,
+                        created_by_subject=created_by_subject,
+                        created_by_role=created_by_role,
                     )
                 )
                 await self._session.flush()

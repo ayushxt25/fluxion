@@ -31,6 +31,7 @@ async def test_sdk_creates_and_reads_workflow_runs_over_public_api() -> None:
         latest = await client.get_workflow(created.id)
         first = await client.get_workflow(created.id, revision=1)
         revisions = await client.list_workflow_revisions(created.id)
+        diff = await client.compare_workflow_revisions(created.id, 1, 2)
         run = await client.create_run(created.id, run_id="sdk-api-run", input=None)
         pinned = await client.create_run(
             created.id, run_id="sdk-api-rev1", revision=1
@@ -45,6 +46,10 @@ async def test_sdk_creates_and_reads_workflow_runs_over_public_api() -> None:
         1,
     )
     assert [item.revision for item in revisions] == [1, 2]
+    assert diff.workflow_changes["name"] == {
+        "before": "SDK API Workflow",
+        "after": "SDK API Workflow revision two",
+    }
     assert (run.workflow_revision, pinned.workflow_revision) == (2, 1)
     assert fetched.has_input
     assert fetched.input is None

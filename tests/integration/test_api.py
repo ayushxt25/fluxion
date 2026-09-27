@@ -251,6 +251,62 @@ async def test_workflow_create_publish_and_revision_reads() -> None:
         assert missing.status_code == 404
 
 
+async def test_workflow_revision_provenance_and_diff_api() -> None:
+    async with api_client() as (client, _):
+        first = await client.post(
+            "/api/v1/workflows",
+            json=workflow_payload("wf-diff"),
+            headers=auth_headers(Role.OPERATOR),
+        )
+        changed_payload = workflow_payload("wf-diff")
+        changed_payload["name"] = "API Workflow v2"
+        changed_payload["tasks"].append(
+            {"id": "c", "name": "C", "depends_on": ["b"]}
+        )
+        second = await client.post(
+            "/api/v1/workflows",
+            json=changed_payload,
+            headers=auth_headers(Role.OPERATOR),
+        )
+        summaries = await client.get(
+            "/api/v1/workflows/wf-diff/revisions",
+            headers=auth_headers(Role.VIEWER),
+        )
+        detail = await client.get(
+            "/api/v1/workflows/wf-diff/revisions/1",
+            headers=auth_headers(Role.VIEWER),
+        )
+        diff = await client.get(
+            "/api/v1/workflows/wf-diff/revisions/1/diff/2",
+            headers=auth_headers(Role.VIEWER),
+        )
+        unknown = await client.get(
+            "/api/v1/workflows/wf-diff/revisions/1/diff/99",
+            headers=auth_headers(Role.VIEWER),
+        )
+        denied = await client.get(
+            "/api/v1/workflows/wf-diff/revisions/1/diff/2",
+            headers=auth_headers(Role.OPERATOR),
+        )
+
+        assert (first.status_code, second.status_code) == (201, 201)
+        assert detail.json()["created_by_subject"] == "operator-user"
+        assert detail.json()["created_by_role"] == "operator"
+        assert all(item["created_at"] for item in summaries.json())
+        assert all(
+            item["created_by_subject"] == "operator-user"
+            and item["created_by_role"] == "operator"
+            for item in summaries.json()
+        )
+        assert [item["revision"] for item in summaries.json()] == [1, 2]
+        assert diff.json()["workflow_changes"] == {
+            "name": {"before": "API Workflow", "after": "API Workflow v2"}
+        }
+        assert diff.json()["added_tasks"] == ["c"]
+        assert unknown.status_code == 404
+        assert denied.status_code == 403
+
+
 async def test_invalid_dag_returns_422() -> None:
     async with api_client() as (client, _):
         payload = {

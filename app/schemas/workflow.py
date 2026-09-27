@@ -1,4 +1,5 @@
 import keyword
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -83,6 +84,9 @@ class WorkflowDefinition(BaseModel):
     name: str
     tasks: tuple[TaskDefinition, ...]
     revision: int = Field(default=1, ge=1)
+    created_at: datetime | None = None
+    created_by_subject: str | None = None
+    created_by_role: str | None = None
 
     model_config = ConfigDict(frozen=True)
 

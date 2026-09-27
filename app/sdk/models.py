@@ -72,12 +72,35 @@ class Workflow(SDKModel):
     name: str
     tasks: tuple[TaskDefinition, ...]
     revision: int = 1
+    created_at: datetime | None = None
+    created_by_subject: str | None = None
+    created_by_role: str | None = None
 
 
 class WorkflowRevisionSummary(SDKModel):
     workflow_id: str
     revision: int
     name: str
+    created_at: datetime
+    created_by_subject: str | None = None
+    created_by_role: str | None = None
+
+
+class TaskRevisionDiff(SDKModel):
+    task_id: str
+    changed_fields: tuple[str, ...]
+    before: dict[str, Any]
+    after: dict[str, Any]
+
+
+class WorkflowRevisionDiff(SDKModel):
+    workflow_id: str
+    from_revision: int
+    to_revision: int
+    workflow_changes: dict[str, dict[str, Any]]
+    added_tasks: tuple[str, ...]
+    removed_tasks: tuple[str, ...]
+    modified_tasks: tuple[TaskRevisionDiff, ...]
 
 
 class WorkflowList(SDKModel):

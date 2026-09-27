@@ -26,6 +26,26 @@ class WorkflowRevisionSummary(BaseModel):
     workflow_id: str
     revision: int
     name: str
+    created_at: datetime
+    created_by_subject: str | None = None
+    created_by_role: str | None = None
+
+
+class TaskRevisionDiff(BaseModel):
+    task_id: str
+    changed_fields: tuple[str, ...]
+    before: dict[str, Any]
+    after: dict[str, Any]
+
+
+class WorkflowRevisionDiff(BaseModel):
+    workflow_id: str
+    from_revision: int
+    to_revision: int
+    workflow_changes: dict[str, dict[str, Any]]
+    added_tasks: tuple[str, ...]
+    removed_tasks: tuple[str, ...]
+    modified_tasks: tuple[TaskRevisionDiff, ...]
 
 
 class CreateWorkflowRunRequest(BaseModel):

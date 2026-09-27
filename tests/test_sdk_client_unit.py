@@ -84,9 +84,36 @@ def test_sync_workflow_revision_surface_serializes_exact_run_revision() -> None:
             return httpx.Response(
                 200,
                 json=[
-                    {"workflow_id": "workflow-1", "revision": 1, "name": "one"},
-                    {"workflow_id": "workflow-1", "revision": 2, "name": "two"},
+                    {
+                        "workflow_id": "workflow-1",
+                        "revision": 1,
+                        "name": "one",
+                        "created_at": "2026-09-01T00:00:00Z",
+                        "created_by_subject": "operator",
+                        "created_by_role": "operator",
+                    },
+                    {
+                        "workflow_id": "workflow-1",
+                        "revision": 2,
+                        "name": "two",
+                        "created_at": "2026-09-02T00:00:00Z",
+                        "created_by_subject": "operator",
+                        "created_by_role": "operator",
+                    },
                 ],
+            )
+        if "/diff/" in request.url.path:
+            return httpx.Response(
+                200,
+                json={
+                    "workflow_id": "workflow-1",
+                    "from_revision": 1,
+                    "to_revision": 2,
+                    "workflow_changes": {},
+                    "added_tasks": [],
+                    "removed_tasks": [],
+                    "modified_tasks": [],
+                },
             )
         revision = 1 if request.url.path.endswith("/1") else 2
         return httpx.Response(
@@ -101,6 +128,7 @@ def test_sync_workflow_revision_surface_serializes_exact_run_revision() -> None:
             item.revision for item in sdk.list_workflow_revisions("workflow-1")
         ] == [1, 2]
         assert sdk.create_run("workflow-1", revision=1).workflow_revision == 1
+        assert sdk.compare_workflow_revisions("workflow-1", 1, 2).to_revision == 2
 
     assert "/api/v1/workflows/workflow-1/revisions/1" in paths
     assert payloads == [{"workflow_revision": 1}]

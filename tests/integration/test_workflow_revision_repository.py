@@ -82,7 +82,12 @@ def test_revision_publish_reads_fidelity_and_immutability():
         changed = workflow().model_copy(update={"name": "Changed"})
         third = await repository.publish(changed)
         assert (first.revision, second.revision, third.revision) == (1, 2, 3)
-        assert await repository.get_revision(original.id, 1) == original
+        loaded_first = await repository.get_revision(original.id, 1)
+        assert loaded_first.model_dump(
+            exclude={"created_at", "created_by_subject", "created_by_role"}
+        ) == original.model_dump(
+            exclude={"created_at", "created_by_subject", "created_by_role"}
+        )
         assert (await repository.get_revision(original.id, 2)).revision == 2
         assert (await repository.get_latest(original.id)).revision == 3
         assert [
@@ -102,11 +107,43 @@ def test_save_seeds_immutable_revision_one_with_full_fidelity():
         await repository.save(original)
 
         assert await repository.get(original.id) == original
-        assert await repository.get_revision(original.id, 1) == original
+        loaded_first = await repository.get_revision(original.id, 1)
+        assert loaded_first.model_dump(
+            exclude={"created_at", "created_by_subject", "created_by_role"}
+        ) == original.model_dump(
+            exclude={"created_at", "created_by_subject", "created_by_role"}
+        )
         assert (await repository.get_latest(original.id)).revision == 1
         assert (await repository.publish(original)).revision == 2
         with pytest.raises(WorkflowAlreadyExistsError):
             await repository.save(original)
+
+    in_db(body)
+
+
+def test_revision_provenance_is_persisted_and_internal_calls_remain_null():
+    async def body(session):
+        repository = WorkflowRepository(session)
+        original = workflow()
+
+        await repository.save(
+            original,
+            created_by_subject="operator-1",
+            created_by_role="operator",
+        )
+        internal = await repository.publish(original)
+        first = await repository.get_revision(original.id, 1)
+        latest = await repository.get_latest(original.id)
+
+        assert (first.created_by_subject, first.created_by_role) == (
+            "operator-1",
+            "operator",
+        )
+        assert (latest.revision, latest.created_by_subject, latest.created_by_role) == (
+            internal.revision,
+            None,
+            None,
+        )
 
     in_db(body)
 

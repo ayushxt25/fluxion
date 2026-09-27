@@ -36,6 +36,7 @@ from app.sdk.models import (
     WebhookSubscriptionList,
     Workflow,
     WorkflowList,
+    WorkflowRevisionDiff,
     WorkflowRevisionSummary,
     WorkflowRun,
     WorkflowRunList,
@@ -151,6 +152,19 @@ class AsyncFluxionClient:
             )
         except PydanticValidationError as exc:
             raise FluxionAPIError("Fluxion API returned an invalid response.") from exc
+
+    async def compare_workflow_revisions(
+        self,
+        workflow_id: str,
+        from_revision: int,
+        to_revision: int,
+    ) -> WorkflowRevisionDiff:
+        return await self._model(
+            "GET",
+            f"/api/v1/workflows/{workflow_id}/revisions/"
+            f"{from_revision}/diff/{to_revision}",
+            WorkflowRevisionDiff,
+        )
 
     async def list_workflows(self, *, limit: int = 50, offset: int = 0) -> WorkflowList:
         return await self._model(

@@ -100,6 +100,8 @@ class WorkflowRevisionRecord(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    created_by_subject: Mapped[str | None] = mapped_column(String(255))
+    created_by_role: Mapped[str | None] = mapped_column(String(32))
 
 
 class WorkflowRevisionTaskRecord(Base):

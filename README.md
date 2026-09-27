@@ -88,6 +88,13 @@ when omitted, or an explicitly requested revision, and remain pinned forever.
 Retention deletes run-owned operational data only; it never deletes workflow
 revisions.
 
+Revision details and lists expose immutable publish provenance (`created_at`,
+subject, and role when available). Compare exact revisions with
+`GET /api/v1/workflows/{id}/revisions/{from}/diff/{to}` or
+`compare_workflow_revisions(id, from_revision, to_revision)` in either SDK.
+The structured diff reports definition changes without modifying a revision or
+a pinned run.
+
 ## Run Events (SSE)
 
 New runs persist compact, ordered state-change events in PostgreSQL. Watch them

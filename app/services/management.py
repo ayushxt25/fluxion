@@ -11,6 +11,7 @@ from app.schemas.api import (
     RecoveryResponse,
     TaskAttemptResponse,
     TaskRunResponse,
+    WorkflowRevisionDiff,
     WorkflowRunListItem,
     WorkflowRunResponse,
 )
@@ -21,6 +22,7 @@ from app.services.repositories import (
     WorkflowRepository,
     WorkflowRunRepository,
 )
+from app.services.revision_diff import compare_workflow_revisions
 
 logger = logging.getLogger(__name__)
 
@@ -29,10 +31,24 @@ class WorkflowManagementService:
     def __init__(self, repository: WorkflowRepository) -> None:
         self._repository = repository
 
-    async def create(self, workflow: WorkflowDefinition) -> WorkflowDefinition:
+    async def create(
+        self,
+        workflow: WorkflowDefinition,
+        *,
+        created_by_subject: str | None = None,
+        created_by_role: str | None = None,
+    ) -> WorkflowDefinition:
         if await self._repository.exists(workflow.id):
-            return await self._repository.publish(workflow)
-        await self._repository.save(workflow)
+            return await self._repository.publish(
+                workflow,
+                created_by_subject=created_by_subject,
+                created_by_role=created_by_role,
+            )
+        await self._repository.save(
+            workflow,
+            created_by_subject=created_by_subject,
+            created_by_role=created_by_role,
+        )
         return await self._repository.get_revision(workflow.id, 1)
 
     async def get(self, workflow_id: str) -> WorkflowDefinition:
@@ -44,6 +60,16 @@ class WorkflowManagementService:
         for item in legacy:
             latest.append(await self._repository.get_latest(item.id))
         return tuple(latest)
+
+    async def compare_revisions(
+        self,
+        workflow_id: str,
+        from_revision: int,
+        to_revision: int,
+    ) -> WorkflowRevisionDiff:
+        before = await self._repository.get_revision(workflow_id, from_revision)
+        after = await self._repository.get_revision(workflow_id, to_revision)
+        return compare_workflow_revisions(before, after)
 
 
 class WorkflowRunManagementService:
