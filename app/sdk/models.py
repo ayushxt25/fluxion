@@ -71,6 +71,13 @@ class Workflow(SDKModel):
     id: str
     name: str
     tasks: tuple[TaskDefinition, ...]
+    revision: int = 1
+
+
+class WorkflowRevisionSummary(SDKModel):
+    workflow_id: str
+    revision: int
+    name: str
 
 
 class WorkflowList(SDKModel):
@@ -95,6 +102,7 @@ class TaskRun(SDKModel):
 class WorkflowRun(SDKModel):
     run_id: str
     workflow_id: str
+    workflow_revision: int = 1
     status: str
     created_at: datetime
     input: JSONValue = None
@@ -105,6 +113,7 @@ class WorkflowRun(SDKModel):
 class WorkflowRunListItem(SDKModel):
     run_id: str
     workflow_id: str
+    workflow_revision: int = 1
     status: str
     created_at: datetime
 
@@ -154,6 +163,7 @@ class RunEvent(SDKModel):
     version: int
     event_type: str
     workflow_id: str
+    workflow_revision: int | None = None
     run_id: str
     task_id: str | None = None
     attempt_number: int | None = None

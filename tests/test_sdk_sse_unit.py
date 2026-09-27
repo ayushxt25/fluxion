@@ -13,6 +13,7 @@ def _sse(event_id: int, event_type: str = "task.succeeded") -> str:
         "version": 1,
         "event_type": event_type,
         "workflow_id": "workflow",
+        "workflow_revision": 1,
         "run_id": "run",
         "task_id": "task",
         "attempt_number": 1,
@@ -37,6 +38,7 @@ def test_sync_watch_parses_events_and_sends_cursor() -> None:
 
     assert [event.id for event in events] == [5]
     assert events[0].event_type == "task.succeeded"
+    assert events[0].workflow_revision == 1
 
 
 @pytest.mark.asyncio
@@ -53,6 +55,7 @@ async def test_async_watch_parses_events() -> None:
         events = [event async for event in client.watch_run("run", after=8)]
 
     assert [event.id for event in events] == [9]
+    assert events[0].workflow_revision == 1
 
 
 def test_sync_watch_rejects_malformed_event() -> None:

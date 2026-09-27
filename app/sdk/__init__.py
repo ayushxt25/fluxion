@@ -30,6 +30,7 @@ from app.sdk.models import (
     WebhookSubscriptionList,
     Workflow,
     WorkflowInputParameter,
+    WorkflowRevisionSummary,
     WorkflowRun,
 )
 from app.sdk.webhooks import verify_webhook_signature
@@ -58,6 +59,7 @@ __all__ = [
     "TaskRun",
     "ValidationError",
     "Workflow",
+    "WorkflowRevisionSummary",
     "WorkflowBuilder",
     "WorkflowInputParameter",
     "WorkflowRun",

@@ -13,6 +13,7 @@ from app.api.pagination import LimitQuery, OffsetQuery
 from app.schemas.api import (
     CreateWorkflowRunRequest,
     WorkflowListResponse,
+    WorkflowRevisionSummary,
     WorkflowRunResponse,
 )
 from app.schemas.workflow import WorkflowDefinition
@@ -47,7 +48,7 @@ def _run_service(session: AsyncSession) -> WorkflowRunManagementService:
     "",
     response_model=WorkflowDefinition,
     status_code=status.HTTP_201_CREATED,
-    summary="Create workflow definition",
+    summary="Create or publish workflow definition",
     dependencies=[
         Depends(require_role(Role.OPERATOR)),
         Depends(require_rate_limit()),
@@ -63,9 +64,10 @@ async def create_workflow(
     await AuditService(AuditEventRepository(session)).record_success(
         request_id=getattr(request.state, "request_id", ""),
         principal=principal,
-        action="workflow.create",
+        action="workflow.publish",
         resource_type="workflow",
         resource_id=workflow.id,
+        metadata={"workflow_id": created.id, "revision": created.revision},
     )
     return created
 
@@ -88,6 +90,39 @@ async def list_workflows(
         offset=offset,
         count=len(workflows),
     )
+
+
+@router.get(
+    "/{workflow_id}/revisions",
+    response_model=tuple[WorkflowRevisionSummary, ...],
+    summary="List immutable workflow revisions",
+    dependencies=[Depends(require_role(Role.VIEWER)), Depends(require_rate_limit())],
+)
+async def list_workflow_revisions(
+    workflow_id: str,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> tuple[WorkflowRevisionSummary, ...]:
+    revisions = await WorkflowRepository(session).list_revisions(workflow_id)
+    return tuple(
+        WorkflowRevisionSummary(
+            workflow_id=item.id, revision=item.revision, name=item.name
+        )
+        for item in revisions
+    )
+
+
+@router.get(
+    "/{workflow_id}/revisions/{revision}",
+    response_model=WorkflowDefinition,
+    summary="Get immutable workflow revision",
+    dependencies=[Depends(require_role(Role.VIEWER)), Depends(require_rate_limit())],
+)
+async def get_workflow_revision(
+    workflow_id: str,
+    revision: int,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> WorkflowDefinition:
+    return await WorkflowRepository(session).get_revision(workflow_id, revision)
 
 
 @router.get(
@@ -124,6 +159,7 @@ async def create_run(
     run = await _run_service(session).create_run(
         workflow_id,
         request.run_id,
+        workflow_revision=request.workflow_revision,
         workflow_input=request.input,
         workflow_input_present="input" in request.model_fields_set,
     )
@@ -134,6 +170,9 @@ async def create_run(
         action="run.create",
         resource_type="run",
         resource_id=run.run_id,
-        metadata={"workflow_id": workflow_id},
+        metadata={
+            "workflow_id": workflow_id,
+            "workflow_revision": run.workflow_revision,
+        },
     )
     return run

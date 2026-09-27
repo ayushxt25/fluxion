@@ -519,6 +519,7 @@ def _event_payload(row: RunEventRecord) -> dict:
         "version": row.version,
         "event_type": row.event_type,
         "workflow_id": row.workflow_id,
+        "workflow_revision": (row.payload or {}).get("workflow_revision"),
         "run_id": row.run_id,
         "task_id": row.task_id,
         "attempt_number": row.attempt_number,

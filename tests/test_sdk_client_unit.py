@@ -70,6 +70,42 @@ def test_create_run_preserves_omitted_and_explicit_null_input() -> None:
     ]
 
 
+def test_sync_workflow_revision_surface_serializes_exact_run_revision() -> None:
+    workflow = WorkflowBuilder("workflow-1").task("task-1").build()
+    paths: list[str] = []
+    payloads: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if request.method == "POST" and request.url.path.endswith("/runs"):
+            payloads.append(json.loads(request.content))
+            return httpx.Response(201, json={**run_payload(), "workflow_revision": 1})
+        if request.url.path.endswith("/revisions"):
+            return httpx.Response(
+                200,
+                json=[
+                    {"workflow_id": "workflow-1", "revision": 1, "name": "one"},
+                    {"workflow_id": "workflow-1", "revision": 2, "name": "two"},
+                ],
+            )
+        revision = 1 if request.url.path.endswith("/1") else 2
+        return httpx.Response(
+            200, json={**workflow.model_dump(mode="json"), "revision": revision}
+        )
+
+    with client(handler) as sdk:
+        assert sdk.publish_workflow(workflow).revision == 2
+        assert sdk.get_workflow("workflow-1").revision == 2
+        assert sdk.get_workflow("workflow-1", revision=1).revision == 1
+        assert [
+            item.revision for item in sdk.list_workflow_revisions("workflow-1")
+        ] == [1, 2]
+        assert sdk.create_run("workflow-1", revision=1).workflow_revision == 1
+
+    assert "/api/v1/workflows/workflow-1/revisions/1" in paths
+    assert payloads == [{"workflow_revision": 1}]
+
+
 @pytest.mark.parametrize(
     ("status", "error_type"),
     [

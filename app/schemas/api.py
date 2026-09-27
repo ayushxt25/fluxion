@@ -22,8 +22,15 @@ class WorkflowListResponse(BaseModel):
     count: int
 
 
+class WorkflowRevisionSummary(BaseModel):
+    workflow_id: str
+    revision: int
+    name: str
+
+
 class CreateWorkflowRunRequest(BaseModel):
     run_id: str | None = None
+    workflow_revision: int | None = Field(default=None, ge=1)
     input: Any = None
 
 
@@ -42,6 +49,7 @@ class TaskRunResponse(BaseModel):
 class WorkflowRunResponse(BaseModel):
     run_id: str
     workflow_id: str
+    workflow_revision: int = 1
     status: str
     created_at: datetime
     input: Any = None
@@ -52,6 +60,7 @@ class WorkflowRunResponse(BaseModel):
 class WorkflowRunListItem(BaseModel):
     run_id: str
     workflow_id: str
+    workflow_revision: int = 1
     status: str
     created_at: datetime
 
@@ -101,6 +110,7 @@ class RunEventResponse(BaseModel):
     version: int
     event_type: str
     workflow_id: str
+    workflow_revision: int | None = None
     run_id: str
     task_id: str | None = None
     attempt_number: int | None = None

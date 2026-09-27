@@ -36,6 +36,7 @@ from app.sdk.models import (
     WebhookSubscriptionList,
     Workflow,
     WorkflowList,
+    WorkflowRevisionSummary,
     WorkflowRun,
     WorkflowRunList,
 )
@@ -128,8 +129,28 @@ class AsyncFluxionClient:
             json=workflow.model_dump(mode="json", by_alias=True),
         )
 
-    async def get_workflow(self, workflow_id: str) -> Workflow:
-        return await self._model("GET", f"/api/v1/workflows/{workflow_id}", Workflow)
+    async def publish_workflow(self, workflow: Workflow) -> Workflow:
+        return await self.create_workflow(workflow)
+
+    async def get_workflow(
+        self, workflow_id: str, revision: int | None = None
+    ) -> Workflow:
+        path = (
+            f"/api/v1/workflows/{workflow_id}"
+            if revision is None
+            else f"/api/v1/workflows/{workflow_id}/revisions/{revision}"
+        )
+        return await self._model("GET", path, Workflow)
+
+    async def list_workflow_revisions(
+        self, workflow_id: str
+    ) -> tuple[WorkflowRevisionSummary, ...]:
+        try:
+            return TypeAdapter(tuple[WorkflowRevisionSummary, ...]).validate_python(
+                await self._request("GET", f"/api/v1/workflows/{workflow_id}/revisions")
+            )
+        except PydanticValidationError as exc:
+            raise FluxionAPIError("Fluxion API returned an invalid response.") from exc
 
     async def list_workflows(self, *, limit: int = 50, offset: int = 0) -> WorkflowList:
         return await self._model(
@@ -144,11 +165,14 @@ class AsyncFluxionClient:
         workflow_id: str,
         *,
         run_id: str | None = None,
+        revision: int | None = None,
         input: Any = _MISSING,
     ) -> WorkflowRun:
         payload: dict[str, Any] = {}
         if run_id is not None:
             payload["run_id"] = run_id
+        if revision is not None:
+            payload["workflow_revision"] = revision
         if input is not _MISSING:
             payload["input"] = input
         return await self._model(

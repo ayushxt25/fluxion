@@ -161,7 +161,7 @@ def workflow_payload(workflow_id: str = "wf-api") -> dict:
     }
 
 
-async def test_workflow_create_read_list_and_conflict() -> None:
+async def test_workflow_create_publish_and_revision_reads() -> None:
     async with api_client() as (client, _):
         response = await client.post(
             "/api/v1/workflows",
@@ -169,14 +169,20 @@ async def test_workflow_create_read_list_and_conflict() -> None:
             headers=auth_headers(Role.OPERATOR),
         )
         assert response.status_code == 201
+        old_run = await client.post(
+            "/api/v1/workflows/wf-api/runs",
+            json={"run_id": "wf-api-old"},
+            headers=auth_headers(Role.OPERATOR),
+        )
 
-        duplicate = await client.post(
+        published = await client.post(
             "/api/v1/workflows",
             json=workflow_payload(),
             headers=auth_headers(Role.OPERATOR),
         )
-        assert duplicate.status_code == 409
-        assert "error" in duplicate.json()
+        assert published.status_code == 201
+        assert response.json()["revision"] == 1
+        assert published.json()["revision"] == 2
 
         fetched = await client.get(
             "/api/v1/workflows/wf-api",
@@ -190,9 +196,41 @@ async def test_workflow_create_read_list_and_conflict() -> None:
             "/api/v1/workflows/missing",
             headers=auth_headers(Role.VIEWER),
         )
+        revisions = await client.get(
+            "/api/v1/workflows/wf-api/revisions",
+            headers=auth_headers(Role.VIEWER),
+        )
+        first_revision = await client.get(
+            "/api/v1/workflows/wf-api/revisions/1",
+            headers=auth_headers(Role.VIEWER),
+        )
+        latest_run = await client.post(
+            "/api/v1/workflows/wf-api/runs",
+            json={"run_id": "wf-api-latest"},
+            headers=auth_headers(Role.OPERATOR),
+        )
+        pinned_run = await client.post(
+            "/api/v1/workflows/wf-api/runs",
+            json={"run_id": "wf-api-rev1", "workflow_revision": 1},
+            headers=auth_headers(Role.OPERATOR),
+        )
+        old_events = await client.get(
+            "/api/v1/runs/wf-api-old/events/history",
+            headers=auth_headers(Role.VIEWER),
+        )
 
         assert fetched.status_code == 200
         assert fetched.json()["id"] == "wf-api"
+        assert fetched.json()["revision"] == 2
+        assert [item["revision"] for item in revisions.json()] == [1, 2]
+        assert first_revision.json()["revision"] == 1
+        assert old_run.json()["workflow_revision"] == 1
+        assert all(
+            item["workflow_revision"] == 1
+            for item in old_events.json()["items"]
+        )
+        assert latest_run.json()["workflow_revision"] == 2
+        assert pinned_run.json()["workflow_revision"] == 1
         assert listed.status_code == 200
         assert [item["id"] for item in listed.json()["items"]] == ["wf-api"]
         assert missing.status_code == 404
@@ -538,7 +576,7 @@ async def test_audit_success_denial_and_admin_listing() -> None:
             headers=auth_headers(Role.ADMIN),
         )
         filtered = await client.get(
-            "/api/v1/ops/audit?action=workflow.create",
+            "/api/v1/ops/audit?action=workflow.publish",
             headers=auth_headers(Role.ADMIN),
         )
 
@@ -547,12 +585,13 @@ async def test_audit_success_denial_and_admin_listing() -> None:
         assert operator_audit.status_code == 403
         assert admin_audit.status_code == 200
         actions = {item["action"] for item in admin_audit.json()["items"]}
-        assert "workflow.create" in actions
+        assert "workflow.publish" in actions
         assert "authorization.denied" in actions
         create_item = filtered.json()["items"][0]
         assert create_item["request_id"] == "request-audit-create"
         assert create_item["principal_subject"] == "operator-user"
         assert create_item["principal_role"] == "operator"
+        assert create_item["metadata"] == {"workflow_id": "wf-audit", "revision": 1}
         assert "test-secret" not in admin_audit.text
         assert "lease_token" not in admin_audit.text
 

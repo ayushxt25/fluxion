@@ -34,6 +34,7 @@ from app.sdk.models import (
     WebhookSubscriptionList,
     Workflow,
     WorkflowList,
+    WorkflowRevisionSummary,
     WorkflowRun,
     WorkflowRunList,
 )
@@ -125,8 +126,26 @@ class FluxionClient:
             json=workflow.model_dump(mode="json", by_alias=True),
         )
 
-    def get_workflow(self, workflow_id: str) -> Workflow:
-        return self._model("GET", f"/api/v1/workflows/{workflow_id}", Workflow)
+    def publish_workflow(self, workflow: Workflow) -> Workflow:
+        return self.create_workflow(workflow)
+
+    def get_workflow(self, workflow_id: str, revision: int | None = None) -> Workflow:
+        path = (
+            f"/api/v1/workflows/{workflow_id}"
+            if revision is None
+            else f"/api/v1/workflows/{workflow_id}/revisions/{revision}"
+        )
+        return self._model("GET", path, Workflow)
+
+    def list_workflow_revisions(
+        self, workflow_id: str
+    ) -> tuple[WorkflowRevisionSummary, ...]:
+        try:
+            return TypeAdapter(tuple[WorkflowRevisionSummary, ...]).validate_python(
+                self._request("GET", f"/api/v1/workflows/{workflow_id}/revisions")
+            )
+        except PydanticValidationError as exc:
+            raise FluxionAPIError("Fluxion API returned an invalid response.") from exc
 
     def list_workflows(self, *, limit: int = 50, offset: int = 0) -> WorkflowList:
         return self._model(
@@ -141,11 +160,14 @@ class FluxionClient:
         workflow_id: str,
         *,
         run_id: str | None = None,
+        revision: int | None = None,
         input: Any = _MISSING,
     ) -> WorkflowRun:
         payload: dict[str, Any] = {}
         if run_id is not None:
             payload["run_id"] = run_id
+        if revision is not None:
+            payload["workflow_revision"] = revision
         if input is not _MISSING:
             payload["input"] = input
         return self._model(

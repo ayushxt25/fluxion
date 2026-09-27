@@ -30,14 +30,17 @@ class WorkflowManagementService:
         self._repository = repository
 
     async def create(self, workflow: WorkflowDefinition) -> WorkflowDefinition:
+        if await self._repository.exists(workflow.id):
+            return await self._repository.publish(workflow)
         await self._repository.save(workflow)
-        return workflow
+        return await self._repository.get_revision(workflow.id, 1)
 
     async def get(self, workflow_id: str) -> WorkflowDefinition:
-        return await self._repository.get(workflow_id)
+        return await self._repository.get_latest(workflow_id)
 
     async def list(self, limit: int, offset: int) -> tuple[WorkflowDefinition, ...]:
-        return await self._repository.list(limit=limit, offset=offset)
+        legacy = await self._repository.list(limit=limit, offset=offset)
+        return tuple(await self._repository.get_latest(item.id) for item in legacy)
 
 
 class WorkflowRunManagementService:
@@ -111,6 +114,7 @@ class WorkflowRunManagementService:
             WorkflowRunListItem(
                 run_id=item.run_id,
                 workflow_id=item.workflow_id,
+                workflow_revision=item.workflow_revision,
                 status=item.status.value,
                 created_at=item.created_at,
             )
@@ -219,6 +223,7 @@ def _run_response(
     return WorkflowRunResponse(
         run_id=workflow_run.run_id,
         workflow_id=workflow_run.workflow_id,
+        workflow_revision=workflow_run.workflow_revision,
         status=workflow_run.status.value,
         created_at=created_at,
         input=(

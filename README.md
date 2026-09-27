@@ -77,6 +77,17 @@ distinct. The SDK returns typed Pydantic models and raises typed API errors,
 including `RateLimitError.retry_after`; it never automatically retries
 mutations. See `examples/basic_workflow.py` and `examples/async_workflow.py`.
 
+## Immutable workflow revisions
+
+Publishing a workflow ID for the first time creates revision `1`; each later
+publish creates a new immutable revision. `GET /api/v1/workflows/{id}` and SDK
+`get_workflow(id)` return the latest revision. Use
+`GET /api/v1/workflows/{id}/revisions`, an exact revision URL, or
+`get_workflow(id, revision=N)` to inspect history. Runs use the latest revision
+when omitted, or an explicitly requested revision, and remain pinned forever.
+Retention deletes run-owned operational data only; it never deletes workflow
+revisions.
+
 ## Run Events (SSE)
 
 New runs persist compact, ordered state-change events in PostgreSQL. Watch them

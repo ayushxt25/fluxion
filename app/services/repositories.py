@@ -480,6 +480,7 @@ class WorkflowRunRepository:
                 events.record(
                     run_id=workflow_run.run_id,
                     workflow_id=workflow_run.workflow_id,
+                    workflow_revision=workflow_run.workflow_revision,
                     event_type="run.created",
                     payload={"status": workflow_run.status.value},
                 )
@@ -488,6 +489,7 @@ class WorkflowRunRepository:
                         events.record(
                             run_id=workflow_run.run_id,
                             workflow_id=workflow_run.workflow_id,
+                            workflow_revision=workflow_run.workflow_revision,
                             event_type="task.ready",
                             task_id=task_id,
                             payload={"status": task_run.status.value},
@@ -1038,6 +1040,7 @@ def _record_state_events(
             events.record(
                 run_id=workflow_run.run_id,
                 workflow_id=workflow_run.workflow_id,
+                workflow_revision=workflow_run.workflow_revision,
                 event_type=event_type,
                 payload={"status": workflow_run.status.value},
             )
@@ -1051,6 +1054,7 @@ def _record_state_events(
             events.record(
                 run_id=workflow_run.run_id,
                 workflow_id=workflow_run.workflow_id,
+                workflow_revision=workflow_run.workflow_revision,
                 event_type=event_type,
                 task_id=task_id,
                 payload={
@@ -1201,6 +1205,7 @@ class TaskAttemptRepository:
             RunEventRepository(self._session).record(
                 run_id=attempt.run_id,
                 workflow_id=attempt.workflow_id,
+                workflow_revision=workflow_run.workflow_revision,
                 event_type="attempt.started",
                 task_id=attempt.task_id,
                 attempt_number=attempt.attempt_number,
@@ -1329,6 +1334,7 @@ class TaskAttemptRepository:
             RunEventRepository(self._session).record(
                 run_id=attempt.run_id,
                 workflow_id=attempt.workflow_id,
+                workflow_revision=workflow_run.workflow_revision,
                 event_type=(
                     "attempt.succeeded"
                     if status == AttemptStatus.SUCCEEDED
@@ -1401,6 +1407,7 @@ class TaskAttemptRepository:
             RunEventRepository(self._session).record(
                 run_id=attempt_ref.run_id,
                 workflow_id=attempt_ref.workflow_id,
+                workflow_revision=workflow_run.workflow_revision,
                 event_type="attempt.interrupted",
                 task_id=attempt_ref.task_id,
                 attempt_number=attempt_ref.attempt_number,

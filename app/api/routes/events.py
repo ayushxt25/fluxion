@@ -46,6 +46,7 @@ def _payload(event: RunEvent) -> dict:
         "version": event.version,
         "event_type": event.event_type,
         "workflow_id": event.workflow_id,
+        "workflow_revision": event.workflow_revision,
         "run_id": event.run_id,
         "task_id": event.task_id,
         "attempt_number": event.attempt_number,

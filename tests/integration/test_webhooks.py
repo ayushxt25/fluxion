@@ -12,7 +12,7 @@ from app.db.models.events import RunEventRecord
 from app.db.models.execution import WorkflowRunRecord
 from app.db.models.webhooks import WebhookDeliveryRecord
 from app.db.models.workflow import WorkflowDefinitionRecord
-from app.services.webhooks import WebhookRepository
+from app.services.webhooks import WebhookRepository, _event_payload
 
 URL = os.environ.get("TEST_DATABASE_URL")
 if not URL:
@@ -113,5 +113,26 @@ def test_historical_and_disabled_subscriptions_do_not_create_intents():
         await repo.disable(disabled.id)
         assert await repo.reconcile() == 0
         assert late.enabled
+
+    in_db(body)
+
+
+def test_webhook_payload_preserves_durable_event_revision():
+    async def body(session):
+        repo = WebhookRepository(session)
+        await repo.create_subscription(
+            "hook", "https://example.com", "s", ("run.succeeded",), "wf-a"
+        )
+        async with session.begin():
+            session.add(event())
+        row = (
+            await session.execute(
+                select(RunEventRecord).where(RunEventRecord.run_id == "run-a")
+            )
+        ).scalar_one()
+        row.payload = {"workflow_revision": 1}
+        await session.commit()
+        assert await repo.reconcile() == 1
+        assert _event_payload(row)["workflow_revision"] == 1
 
     in_db(body)

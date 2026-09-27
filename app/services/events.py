@@ -13,6 +13,7 @@ class RunEvent:
     version: int
     event_type: str
     workflow_id: str
+    workflow_revision: int | None
     run_id: str
     task_id: str | None
     attempt_number: int | None
@@ -31,11 +32,15 @@ class RunEventRepository:
         *,
         run_id: str,
         workflow_id: str,
+        workflow_revision: int | None = None,
         event_type: str,
         task_id: str | None = None,
         attempt_number: int | None = None,
         payload: dict | None = None,
     ) -> None:
+        event_payload = dict(payload or {})
+        if workflow_revision is not None:
+            event_payload["workflow_revision"] = workflow_revision
         self._session.add(
             RunEventRecord(
                 run_id=run_id,
@@ -44,7 +49,7 @@ class RunEventRepository:
                 task_id=task_id,
                 attempt_number=attempt_number,
                 version=1,
-                payload=payload,
+                payload=event_payload or None,
             )
         )
 
@@ -67,6 +72,7 @@ def _event(record: RunEventRecord) -> RunEvent:
         version=record.version,
         event_type=record.event_type,
         workflow_id=record.workflow_id,
+        workflow_revision=(record.payload or {}).get("workflow_revision"),
         run_id=record.run_id,
         task_id=record.task_id,
         attempt_number=record.attempt_number,
