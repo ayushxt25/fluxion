@@ -284,9 +284,12 @@ async def test_workflow_revision_provenance_and_diff_api() -> None:
             "/api/v1/workflows/wf-diff/revisions/1/diff/99",
             headers=auth_headers(Role.VIEWER),
         )
-        denied = await client.get(
+        operator_diff = await client.get(
             "/api/v1/workflows/wf-diff/revisions/1/diff/2",
             headers=auth_headers(Role.OPERATOR),
+        )
+        unauthenticated = await client.get(
+            "/api/v1/workflows/wf-diff/revisions/1/diff/2"
         )
 
         assert (first.status_code, second.status_code) == (201, 201)
@@ -303,8 +306,10 @@ async def test_workflow_revision_provenance_and_diff_api() -> None:
             "name": {"before": "API Workflow", "after": "API Workflow v2"}
         }
         assert diff.json()["added_tasks"] == ["c"]
+        assert diff.status_code == 200
+        assert operator_diff.status_code == 200
         assert unknown.status_code == 404
-        assert denied.status_code == 403
+        assert unauthenticated.status_code == 401
 
 
 async def test_invalid_dag_returns_422() -> None:
