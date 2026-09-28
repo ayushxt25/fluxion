@@ -494,6 +494,7 @@ class WorkflowRunRepository:
                 TaskRunRecord(
                     run_id=workflow_run.run_id,
                     workflow_id=workflow_run.workflow_id,
+                    workflow_revision=workflow_run.workflow_revision,
                     task_id=task_id,
                     status=task_run.status.value,
                     next_retry_at=task_run.next_retry_at,

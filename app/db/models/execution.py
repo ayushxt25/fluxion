@@ -21,6 +21,12 @@ from app.db.base import Base
 class WorkflowRunRecord(Base):
     __tablename__ = "workflow_runs"
     __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "workflow_id",
+            "workflow_revision",
+            name="uq_workflow_runs_run_workflow_revision",
+        ),
         UniqueConstraint("run_id", "workflow_id", name="uq_workflow_runs_run_workflow"),
     )
 
@@ -62,13 +68,21 @@ class TaskRunRecord(Base):
     __tablename__ = "task_runs"
     __table_args__ = (
         ForeignKeyConstraint(
-            ["run_id", "workflow_id"],
-            ["workflow_runs.run_id", "workflow_runs.workflow_id"],
+            ["run_id", "workflow_id", "workflow_revision"],
+            [
+                "workflow_runs.run_id",
+                "workflow_runs.workflow_id",
+                "workflow_runs.workflow_revision",
+            ],
             ondelete="RESTRICT",
         ),
         ForeignKeyConstraint(
-            ["workflow_id", "task_id"],
-            ["task_definitions.workflow_id", "task_definitions.task_id"],
+            ["workflow_id", "workflow_revision", "task_id"],
+            [
+                "workflow_revision_tasks.workflow_id",
+                "workflow_revision_tasks.revision",
+                "workflow_revision_tasks.task_id",
+            ],
             ondelete="RESTRICT",
         ),
         UniqueConstraint(
@@ -85,6 +99,7 @@ class TaskRunRecord(Base):
 
     run_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    workflow_revision: Mapped[int] = mapped_column(Integer, nullable=False)
     task_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -99,7 +114,7 @@ class TaskRunRecord(Base):
 
     workflow_run: Mapped[WorkflowRunRecord] = relationship(
         back_populates="task_runs",
-        foreign_keys=[run_id, workflow_id],
+        foreign_keys=[run_id, workflow_id, workflow_revision],
     )
 
 

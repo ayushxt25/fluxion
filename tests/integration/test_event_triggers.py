@@ -7,11 +7,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.db import models  # noqa: F401
 from app.db.base import Base
-from app.db.models.execution import WorkflowRunRecord
+from app.db.models.execution import TaskRunRecord, WorkflowRunRecord
 from app.db.models.triggers import WorkflowEventFiringRecord, WorkflowTriggerEventRecord
 from app.schemas.triggers import EventIngestRequest, EventSubscriptionCreate
 from app.schemas.workflow import TaskDefinition, WorkflowDefinition
-from app.services.repositories import WorkflowRepository
+from app.services.repositories import WorkflowRepository, WorkflowRunRepository
 from app.services.triggers import EventIngestionService, EventSubscriptionRepository
 
 URL = os.environ.get("TEST_DATABASE_URL")
@@ -52,6 +52,44 @@ def test_event_trigger_idempotency_and_revision_pinning() -> None:
                 assert any(row.event_subscription_id == latest.id for row in rows)
                 assert await session.scalar(select(func.count()).select_from(WorkflowTriggerEventRecord)) == 1
                 assert await session.scalar(select(func.count()).select_from(WorkflowEventFiringRecord)) == 2
+        finally:
+            await engine.dispose()
+
+    asyncio.run(scenario())
+
+
+def test_revision_two_with_different_task_id_initializes_task_runs() -> None:
+    async def scenario() -> None:
+        engine = create_async_engine(URL)
+        async with engine.begin() as connection:
+            await connection.run_sync(Base.metadata.drop_all)
+            await connection.run_sync(Base.metadata.create_all)
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        try:
+            async with factory() as session:
+                repository = WorkflowRepository(session)
+                first = WorkflowDefinition(
+                    id="changed-tasks",
+                    name="first",
+                    tasks=(TaskDefinition(id="one"),),
+                )
+                await repository.save(first)
+                second = await repository.publish(
+                    WorkflowDefinition(
+                        id="changed-tasks",
+                        name="second",
+                        tasks=(TaskDefinition(id="two"),),
+                    )
+                )
+                from app.engine.execution import WorkflowRun
+
+                run = WorkflowRun.create("revision-two", second)
+                await WorkflowRunRepository(session).create(run)
+                task_rows = tuple((await session.execute(select(TaskRunRecord))).scalars())
+                assert task_rows[0].workflow_revision == 2
+                assert task_rows[0].task_id == "two"
+                loaded = await WorkflowRunRepository(session).get("revision-two", second)
+                assert set(loaded.task_runs) == {"two"}
         finally:
             await engine.dispose()
 
