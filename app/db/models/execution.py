@@ -45,6 +45,8 @@ class WorkflowRunRecord(Base):
         default=False,
         server_default="false",
     )
+    schedule_id: Mapped[str | None] = mapped_column(String(36))
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     task_runs: Mapped[list["TaskRunRecord"]] = relationship(
         back_populates="workflow_run",

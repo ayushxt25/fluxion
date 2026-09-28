@@ -253,6 +253,8 @@ def _run_response(
         run_id=workflow_run.run_id,
         workflow_id=workflow_run.workflow_id,
         workflow_revision=workflow_run.workflow_revision,
+        schedule_id=workflow_run.schedule_id,
+        scheduled_for=workflow_run.scheduled_for,
         status=workflow_run.status.value,
         created_at=created_at,
         input=(

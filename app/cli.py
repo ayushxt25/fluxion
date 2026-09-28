@@ -18,6 +18,7 @@ def main() -> None:
         "webhook",
         "webhooks",
         "retention",
+        "schedule-runner",
         "demo",
     ):
         subcommands.add_parser(command, help=f"Run the Fluxion {command} runtime.")
@@ -28,6 +29,7 @@ def main() -> None:
         publisher,
         reaper,
         retention,
+        schedule_runner,
         scheduler,
         webhooks,
         worker,
@@ -42,6 +44,7 @@ def main() -> None:
         "webhooks": webhooks.main,
         "webhook": webhooks.main,
         "retention": retention.main,
+        "schedule-runner": schedule_runner.main,
         "demo": demo.cli,
     }
     runtimes[args.command]()

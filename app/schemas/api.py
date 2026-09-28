@@ -70,6 +70,8 @@ class WorkflowRunResponse(BaseModel):
     run_id: str
     workflow_id: str
     workflow_revision: int = 1
+    schedule_id: str | None = None
+    scheduled_for: datetime | None = None
     status: str
     created_at: datetime
     input: Any = None

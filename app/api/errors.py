@@ -22,6 +22,7 @@ from app.engine.exceptions import (
     WorkflowRunAlreadyExistsError,
     WorkflowRunNotFoundError,
     WorkflowRunNotResumableError,
+    WorkflowScheduleNotFoundError,
     WorkflowValidationError,
 )
 from app.observability.context import clear_log_context, set_request_id
@@ -44,6 +45,7 @@ def install_api_handlers(app: FastAPI) -> None:
     app.middleware("http")(request_id_middleware)
     app.add_exception_handler(WorkflowNotFoundError, not_found_handler)
     app.add_exception_handler(WorkflowRunNotFoundError, not_found_handler)
+    app.add_exception_handler(WorkflowScheduleNotFoundError, not_found_handler)
     app.add_exception_handler(UnknownTaskRunError, not_found_handler)
     app.add_exception_handler(WorkflowAlreadyExistsError, conflict_handler)
     app.add_exception_handler(WorkflowRunAlreadyExistsError, conflict_handler)

@@ -71,6 +71,8 @@ class WorkflowRun:
         dag: WorkflowDAG | None = None,
         workflow_input: JSONValue = None,
         workflow_input_present: bool = False,
+        schedule_id: str | None = None,
+        scheduled_for: datetime | None = None,
     ) -> None:
         self.run_id = run_id
         self.workflow_id = workflow.id
@@ -79,6 +81,8 @@ class WorkflowRun:
         self._status = WorkflowStatus.PENDING
         self.workflow_input = clone_json_value(workflow_input)
         self.workflow_input_present = workflow_input_present
+        self.schedule_id = schedule_id
+        self.scheduled_for = scheduled_for
         self._task_runs = {
             task_id: TaskRun(
                 task_id=task_id,
@@ -98,6 +102,8 @@ class WorkflowRun:
         dag: WorkflowDAG | None = None,
         workflow_input: JSONValue = None,
         workflow_input_present: bool = False,
+        schedule_id: str | None = None,
+        scheduled_for: datetime | None = None,
     ) -> "WorkflowRun":
         return cls(
             run_id=run_id,
@@ -105,6 +111,8 @@ class WorkflowRun:
             dag=dag,
             workflow_input=workflow_input,
             workflow_input_present=workflow_input_present,
+            schedule_id=schedule_id,
+            scheduled_for=scheduled_for,
         )
 
     @classmethod
@@ -121,6 +129,8 @@ class WorkflowRun:
         workflow_input: JSONValue = None,
         workflow_input_present: bool = False,
         dag: WorkflowDAG | None = None,
+        schedule_id: str | None = None,
+        scheduled_for: datetime | None = None,
     ) -> "WorkflowRun":
         workflow_dag = dag or WorkflowDAG(workflow)
         expected_task_ids = set(workflow_dag.topological_order())
@@ -138,6 +148,8 @@ class WorkflowRun:
             dag=workflow_dag,
             workflow_input=workflow_input,
             workflow_input_present=workflow_input_present,
+            schedule_id=schedule_id,
+            scheduled_for=scheduled_for,
         )
         workflow_run._status = status
         workflow_run._task_runs = {

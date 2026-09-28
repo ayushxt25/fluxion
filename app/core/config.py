@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     retention_outbox_days: int = 7
     retention_batch_size: int = 500
     retention_poll_interval_seconds: float = 3600
+    schedule_runner_poll_seconds: float = 1
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -118,6 +119,8 @@ class Settings(BaseSettings):
             raise ValueError("OUTBOX_CLAIM_SECONDS must be positive.")
         if self.lease_reaper_interval_seconds <= 0:
             raise ValueError("LEASE_REAPER_INTERVAL_SECONDS must be positive.")
+        if self.schedule_runner_poll_seconds <= 0:
+            raise ValueError("SCHEDULE_RUNNER_POLL_SECONDS must be positive.")
         if self.jwt_algorithm != "HS256":
             raise ValueError("JWT_ALGORITHM must be HS256.")
         if self.jwt_access_token_minutes <= 0:

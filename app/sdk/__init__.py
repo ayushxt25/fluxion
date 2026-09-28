@@ -34,6 +34,8 @@ from app.sdk.models import (
     WorkflowRevisionDiff,
     WorkflowRevisionSummary,
     WorkflowRun,
+    WorkflowSchedule,
+    WorkflowScheduleList,
 )
 from app.sdk.webhooks import verify_webhook_signature
 from app.sdk.workflow import WorkflowBuilder, dependency_result, literal, workflow_input
@@ -67,6 +69,8 @@ __all__ = [
     "WorkflowBuilder",
     "WorkflowInputParameter",
     "WorkflowRun",
+    "WorkflowSchedule",
+    "WorkflowScheduleList",
     "WebhookSubscription",
     "WebhookSubscriptionList",
     "RetentionCategorySummary",

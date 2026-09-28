@@ -465,58 +465,62 @@ class WorkflowRunRepository:
     async def create(self, workflow_run: WorkflowRun) -> None:
         try:
             async with self._session.begin():
-                if await self._session.get(WorkflowRunRecord, workflow_run.run_id):
-                    raise WorkflowRunAlreadyExistsError(workflow_run.run_id)
-
-                record = WorkflowRunRecord(
-                    run_id=workflow_run.run_id,
-                    workflow_id=workflow_run.workflow_id,
-                    workflow_revision=workflow_run.workflow_revision,
-                    status=workflow_run.status.value,
-                    input=workflow_run.workflow_input,
-                    input_present=workflow_run.workflow_input_present,
-                )
-                self._session.add(record)
-                await self._session.flush()
-
-                self._session.add_all(
-                    [
-                        TaskRunRecord(
-                            run_id=workflow_run.run_id,
-                            workflow_id=workflow_run.workflow_id,
-                            task_id=task_id,
-                            status=task_run.status.value,
-                            next_retry_at=task_run.next_retry_at,
-                            idempotency_key=task_run.idempotency_key
-                            or f"{workflow_run.run_id}:{task_id}",
-                            result=task_run.result,
-                            result_present=task_run.result_present,
-                        )
-                        for task_id, task_run in workflow_run.task_runs.items()
-                    ]
-                )
-                events = RunEventRepository(self._session)
-                events.record(
-                    run_id=workflow_run.run_id,
-                    workflow_id=workflow_run.workflow_id,
-                    workflow_revision=workflow_run.workflow_revision,
-                    event_type="run.created",
-                    payload={"status": workflow_run.status.value},
-                )
-                for task_id, task_run in workflow_run.task_runs.items():
-                    if task_run.status == TaskStatus.READY:
-                        events.record(
-                            run_id=workflow_run.run_id,
-                            workflow_id=workflow_run.workflow_id,
-                            workflow_revision=workflow_run.workflow_revision,
-                            event_type="task.ready",
-                            task_id=task_id,
-                            payload={"status": task_run.status.value},
-                        )
+                await self.create_in_transaction(workflow_run)
         except IntegrityError as exc:
             raise PersistenceError(
                 f"Failed to persist workflow run '{workflow_run.run_id}'."
             ) from exc
+
+    async def create_in_transaction(self, workflow_run: WorkflowRun) -> None:
+        """Persist a run inside an owning transaction (schedule firing use only)."""
+        if await self._session.get(WorkflowRunRecord, workflow_run.run_id):
+            raise WorkflowRunAlreadyExistsError(workflow_run.run_id)
+        record = WorkflowRunRecord(
+            run_id=workflow_run.run_id,
+            workflow_id=workflow_run.workflow_id,
+            workflow_revision=workflow_run.workflow_revision,
+            status=workflow_run.status.value,
+            input=workflow_run.workflow_input,
+            input_present=workflow_run.workflow_input_present,
+            schedule_id=workflow_run.schedule_id,
+            scheduled_for=workflow_run.scheduled_for,
+        )
+        self._session.add(record)
+        await self._session.flush()
+        self._session.add_all(
+            [
+                TaskRunRecord(
+                    run_id=workflow_run.run_id,
+                    workflow_id=workflow_run.workflow_id,
+                    task_id=task_id,
+                    status=task_run.status.value,
+                    next_retry_at=task_run.next_retry_at,
+                    idempotency_key=task_run.idempotency_key
+                    or f"{workflow_run.run_id}:{task_id}",
+                    result=task_run.result,
+                    result_present=task_run.result_present,
+                )
+                for task_id, task_run in workflow_run.task_runs.items()
+            ]
+        )
+        events = RunEventRepository(self._session)
+        events.record(
+            run_id=workflow_run.run_id,
+            workflow_id=workflow_run.workflow_id,
+            workflow_revision=workflow_run.workflow_revision,
+            event_type="run.created",
+            payload={"status": workflow_run.status.value},
+        )
+        for task_id, task_run in workflow_run.task_runs.items():
+            if task_run.status == TaskStatus.READY:
+                events.record(
+                    run_id=workflow_run.run_id,
+                    workflow_id=workflow_run.workflow_id,
+                    workflow_revision=workflow_run.workflow_revision,
+                    event_type="task.ready",
+                    task_id=task_id,
+                    payload={"status": task_run.status.value},
+                )
 
     async def get(self, run_id: str, workflow: WorkflowDefinition) -> WorkflowRun:
         async with self._session.begin():
@@ -569,6 +573,8 @@ class WorkflowRunRepository:
                     result_present=result_present,
                     workflow_input=record.input,
                     workflow_input_present=record.input_present,
+                    schedule_id=record.schedule_id,
+                    scheduled_for=record.scheduled_for,
                 )
                 workflow_run.workflow_revision = record.workflow_revision
                 return workflow_run

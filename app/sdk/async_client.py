@@ -40,6 +40,8 @@ from app.sdk.models import (
     WorkflowRevisionSummary,
     WorkflowRun,
     WorkflowRunList,
+    WorkflowSchedule,
+    WorkflowScheduleList,
 )
 
 _T = TypeVar("_T", bound=BaseModel)
@@ -193,6 +195,47 @@ class AsyncFluxionClient:
             "POST", f"/api/v1/workflows/{workflow_id}/runs", WorkflowRun, json=payload
         )
 
+    async def create_schedule(self, **payload: Any) -> WorkflowSchedule:
+        _translate_schedule_revision(payload)
+        return await self._model(
+            "POST", "/api/v1/schedules", WorkflowSchedule, json=payload
+        )
+
+    async def get_schedule(self, schedule_id: str) -> WorkflowSchedule:
+        return await self._model(
+            "GET", f"/api/v1/schedules/{schedule_id}", WorkflowSchedule
+        )
+
+    async def list_schedules(
+        self, *, limit: int = 50, offset: int = 0
+    ) -> WorkflowScheduleList:
+        return await self._model(
+            "GET",
+            "/api/v1/schedules",
+            WorkflowScheduleList,
+            params={"limit": limit, "offset": offset},
+        )
+
+    async def update_schedule(
+        self, schedule_id: str, **payload: Any
+    ) -> WorkflowSchedule:
+        _translate_schedule_revision(payload)
+        return await self._model(
+            "PATCH", f"/api/v1/schedules/{schedule_id}", WorkflowSchedule, json=payload
+        )
+
+    async def pause_schedule(self, schedule_id: str) -> WorkflowSchedule:
+        return await self._model(
+            "POST", f"/api/v1/schedules/{schedule_id}/pause", WorkflowSchedule
+        )
+
+    async def resume_schedule(self, schedule_id: str) -> WorkflowSchedule:
+        return await self._model(
+            "POST", f"/api/v1/schedules/{schedule_id}/resume", WorkflowSchedule
+        )
+
+    async def delete_schedule(self, schedule_id: str) -> None:
+        await self._request("DELETE", f"/api/v1/schedules/{schedule_id}")
     async def get_run(self, run_id: str) -> WorkflowRun:
         return await self._model("GET", f"/api/v1/runs/{run_id}", WorkflowRun)
 
@@ -439,3 +482,8 @@ class AsyncFluxionClient:
             raise map_http_error(exc) from exc
         raise_for_response(response)
         return parse_json(response)
+
+
+def _translate_schedule_revision(payload: dict[str, Any]) -> None:
+    if "revision" in payload:
+        payload["workflow_revision"] = payload.pop("revision")

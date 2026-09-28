@@ -103,6 +103,31 @@ class WorkflowRevisionDiff(SDKModel):
     modified_tasks: tuple[TaskRevisionDiff, ...]
 
 
+class WorkflowSchedule(SDKModel):
+    id: str
+    workflow_id: str
+    workflow_revision: int | None
+    schedule_type: str
+    cron_expression: str | None
+    interval_seconds: int | None
+    timezone: str
+    misfire_policy: str
+    enabled: bool
+    next_fire_at: datetime
+    last_fire_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    created_by_subject: str | None
+    created_by_role: str | None
+
+
+class WorkflowScheduleList(SDKModel):
+    items: tuple[WorkflowSchedule, ...]
+    limit: int
+    offset: int
+    count: int
+
+
 class WorkflowList(SDKModel):
     items: tuple[Workflow, ...]
     limit: int
@@ -126,6 +151,8 @@ class WorkflowRun(SDKModel):
     run_id: str
     workflow_id: str
     workflow_revision: int = 1
+    schedule_id: str | None = None
+    scheduled_for: datetime | None = None
     status: str
     created_at: datetime
     input: JSONValue = None

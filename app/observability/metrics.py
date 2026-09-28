@@ -158,6 +158,18 @@ def record_scheduler_backpressure() -> None:
     registry.inc_counter("fluxion_scheduler_backpressure_total")
 
 
+def record_schedule_fire(outcome: str) -> None:
+    registry.inc_counter("fluxion_schedule_fires_total", {"outcome": outcome})
+
+
+def record_schedule_misfire(policy: str) -> None:
+    registry.inc_counter("fluxion_schedule_misfires_total", {"policy": policy})
+
+
+def record_schedule_runner_error() -> None:
+    registry.inc_counter("fluxion_schedule_runner_errors_total")
+
+
 def record_worker_capacity(capacity: int) -> None:
     registry.set_gauge("fluxion_worker_capacity", capacity)
 

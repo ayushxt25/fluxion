@@ -95,6 +95,16 @@ subject, and role when available). Compare exact revisions with
 The structured diff reports definition changes without modifying a revision or
 a pinned run.
 
+## Durable workflow schedules
+
+Create cron or interval schedules at `/api/v1/schedules`. A schedule with no
+`workflow_revision` resolves the latest immutable revision when it fires;
+an explicit revision remains pinned. Schedules use UTC by default, support IANA
+timezones, `SKIP` (default) or bounded `FIRE_ONCE` misfires, and can be paused
+or resumed. Run `fluxion-schedule-runner` (or Compose maintenance profile) to
+process due schedules. PostgreSQL firing identities prevent concurrent runners
+from creating duplicate logical fires.
+
 ## Run Events (SSE)
 
 New runs persist compact, ordered state-change events in PostgreSQL. Watch them

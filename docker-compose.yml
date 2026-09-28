@@ -84,6 +84,16 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  schedule-runner:
+    image: fluxion:local
+    build: .
+    command: ["fluxion-schedule-runner"]
+    environment: *app-env
+    profiles: ["maintenance"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   publisher:
     image: fluxion:local
     build: .

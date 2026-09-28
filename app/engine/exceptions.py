@@ -123,6 +123,11 @@ class WorkflowNotFoundError(PersistenceError):
         super().__init__(f"Workflow '{workflow_id}' was not found.")
 
 
+class WorkflowScheduleNotFoundError(PersistenceError):
+    def __init__(self, schedule_id: str) -> None:
+        super().__init__(f"Workflow schedule '{schedule_id}' was not found.")
+
+
 class WorkflowRunAlreadyExistsError(PersistenceError):
     def __init__(self, run_id: str) -> None:
         super().__init__(f"Workflow run '{run_id}' already exists.")

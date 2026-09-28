@@ -38,6 +38,8 @@ from app.sdk.models import (
     WorkflowRevisionSummary,
     WorkflowRun,
     WorkflowRunList,
+    WorkflowSchedule,
+    WorkflowScheduleList,
 )
 
 _MISSING = object()
@@ -188,6 +190,41 @@ class FluxionClient:
             "POST", f"/api/v1/workflows/{workflow_id}/runs", WorkflowRun, json=payload
         )
 
+    def create_schedule(self, **payload: Any) -> WorkflowSchedule:
+        _translate_schedule_revision(payload)
+        return self._model("POST", "/api/v1/schedules", WorkflowSchedule, json=payload)
+
+    def get_schedule(self, schedule_id: str) -> WorkflowSchedule:
+        return self._model("GET", f"/api/v1/schedules/{schedule_id}", WorkflowSchedule)
+
+    def list_schedules(
+        self, *, limit: int = 50, offset: int = 0
+    ) -> WorkflowScheduleList:
+        return self._model(
+            "GET",
+            "/api/v1/schedules",
+            WorkflowScheduleList,
+            params={"limit": limit, "offset": offset},
+        )
+
+    def update_schedule(self, schedule_id: str, **payload: Any) -> WorkflowSchedule:
+        _translate_schedule_revision(payload)
+        return self._model(
+            "PATCH", f"/api/v1/schedules/{schedule_id}", WorkflowSchedule, json=payload
+        )
+
+    def pause_schedule(self, schedule_id: str) -> WorkflowSchedule:
+        return self._model(
+            "POST", f"/api/v1/schedules/{schedule_id}/pause", WorkflowSchedule
+        )
+
+    def resume_schedule(self, schedule_id: str) -> WorkflowSchedule:
+        return self._model(
+            "POST", f"/api/v1/schedules/{schedule_id}/resume", WorkflowSchedule
+        )
+
+    def delete_schedule(self, schedule_id: str) -> None:
+        self._request("DELETE", f"/api/v1/schedules/{schedule_id}")
     def get_run(self, run_id: str) -> WorkflowRun:
         return self._model("GET", f"/api/v1/runs/{run_id}", WorkflowRun)
 
@@ -409,6 +446,12 @@ class FluxionClient:
             raise map_http_error(exc) from exc
         raise_for_response(response)
         return parse_json(response)
+
+
+def _translate_schedule_revision(payload: dict[str, Any]) -> None:
+    """Keep SDK's concise ``revision`` argument aligned with the API field."""
+    if "revision" in payload:
+        payload["workflow_revision"] = payload.pop("revision")
 
 
 def _parse_sse(lines: Iterator[str]) -> Iterator[RunEvent]:
