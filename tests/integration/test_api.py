@@ -333,25 +333,60 @@ async def test_invalid_dag_returns_422() -> None:
 async def test_schedule_api_lifecycle_rbac_validation_and_audit() -> None:
     async with api_client() as (client, _):
         await client.post(
-            "/api/v1/workflows", json=workflow_payload("wf-schedule-api"), headers=auth_headers(Role.OPERATOR)
+            "/api/v1/workflows",
+            json=workflow_payload("wf-schedule-api"),
+            headers=auth_headers(Role.OPERATOR),
         )
         payload = {
-            "workflow_id": "wf-schedule-api", "schedule_type": "INTERVAL",
-            "interval_seconds": 60, "timezone": "Asia/Kolkata", "misfire_policy": "FIRE_ONCE",
+            "workflow_id": "wf-schedule-api",
+            "schedule_type": "INTERVAL",
+            "interval_seconds": 60,
+            "timezone": "Asia/Kolkata",
+            "misfire_policy": "FIRE_ONCE",
         }
-        created = await client.post("/api/v1/schedules", json=payload, headers=auth_headers(Role.OPERATOR))
+        created = await client.post(
+            "/api/v1/schedules", json=payload, headers=auth_headers(Role.OPERATOR)
+        )
         schedule_id = created.json()["id"]
-        listed = await client.get("/api/v1/schedules", headers=auth_headers(Role.VIEWER))
-        fetched = await client.get(f"/api/v1/schedules/{schedule_id}", headers=auth_headers(Role.VIEWER))
-        updated = await client.patch(f"/api/v1/schedules/{schedule_id}", json={"workflow_revision": 1}, headers=auth_headers(Role.OPERATOR))
-        paused = await client.post(f"/api/v1/schedules/{schedule_id}/pause", headers=auth_headers(Role.OPERATOR))
-        resumed = await client.post(f"/api/v1/schedules/{schedule_id}/resume", headers=auth_headers(Role.OPERATOR))
-        deleted = await client.delete(f"/api/v1/schedules/{schedule_id}", headers=auth_headers(Role.OPERATOR))
-        viewer_mutation = await client.post("/api/v1/schedules", json=payload, headers=auth_headers(Role.VIEWER))
+        listed = await client.get(
+            "/api/v1/schedules", headers=auth_headers(Role.VIEWER)
+        )
+        fetched = await client.get(
+            f"/api/v1/schedules/{schedule_id}", headers=auth_headers(Role.VIEWER)
+        )
+        updated = await client.patch(
+            f"/api/v1/schedules/{schedule_id}",
+            json={"workflow_revision": 1},
+            headers=auth_headers(Role.OPERATOR),
+        )
+        paused = await client.post(
+            f"/api/v1/schedules/{schedule_id}/pause",
+            headers=auth_headers(Role.OPERATOR),
+        )
+        resumed = await client.post(
+            f"/api/v1/schedules/{schedule_id}/resume",
+            headers=auth_headers(Role.OPERATOR),
+        )
+        deleted = await client.delete(
+            f"/api/v1/schedules/{schedule_id}", headers=auth_headers(Role.OPERATOR)
+        )
+        viewer_mutation = await client.post(
+            "/api/v1/schedules", json=payload, headers=auth_headers(Role.VIEWER)
+        )
         unauthenticated = await client.get("/api/v1/schedules")
-        invalid = await client.post("/api/v1/schedules", json={**payload, "cron_expression": "bad"}, headers=auth_headers(Role.OPERATOR))
-        unknown = await client.post("/api/v1/schedules", json={**payload, "workflow_revision": 99}, headers=auth_headers(Role.OPERATOR))
-        audit = await client.get("/api/v1/ops/audit?limit=20", headers=auth_headers(Role.ADMIN))
+        invalid = await client.post(
+            "/api/v1/schedules",
+            json={**payload, "cron_expression": "bad"},
+            headers=auth_headers(Role.OPERATOR),
+        )
+        unknown = await client.post(
+            "/api/v1/schedules",
+            json={**payload, "workflow_revision": 99},
+            headers=auth_headers(Role.OPERATOR),
+        )
+        audit = await client.get(
+            "/api/v1/ops/audit?limit=20", headers=auth_headers(Role.ADMIN)
+        )
         assert created.status_code == 201
         assert listed.status_code == fetched.status_code == 200
         assert fetched.json()["timezone"] == "Asia/Kolkata"
@@ -365,7 +400,13 @@ async def test_schedule_api_lifecycle_rbac_validation_and_audit() -> None:
         assert unknown.status_code == 404
         audit_items = audit.json()["items"]
         actions = {item["action"] for item in audit_items}
-        assert {"schedule.create", "schedule.update", "schedule.pause", "schedule.resume", "schedule.delete"} <= actions
+        assert {
+            "schedule.create",
+            "schedule.update",
+            "schedule.pause",
+            "schedule.resume",
+            "schedule.delete",
+        } <= actions
         schedule_audit = next(
             item for item in audit_items if item["action"] == "schedule.create"
         )

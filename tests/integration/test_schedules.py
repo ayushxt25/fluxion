@@ -13,7 +13,7 @@ from app.db.models.execution import WorkflowRunRecord
 from app.db.models.schedules import WorkflowScheduleFiringRecord, WorkflowScheduleRecord
 from app.schemas.schedules import MisfirePolicy, ScheduleCreate, ScheduleType
 from app.schemas.workflow import TaskDefinition, WorkflowDefinition
-from app.services.repositories import WorkflowRepository
+from app.services.repositories import WorkflowRepository, WorkflowRunRepository
 from app.services.schedules import ScheduleRepository, ScheduleRunner
 
 URL = os.environ.get("TEST_DATABASE_URL")
@@ -197,7 +197,8 @@ def test_firing_transaction_rolls_back_before_and_after_run_staging(monkeypatch)
             await WorkflowRepository(session).save(definition())
             schedule = await ScheduleRepository(session).create(
                 ScheduleCreate(
-                    workflow_id="scheduled-workflow", schedule_type=ScheduleType.INTERVAL,
+                    workflow_id="scheduled-workflow",
+                    schedule_type=ScheduleType.INTERVAL,
                     interval_seconds=60, next_fire_at=now,
                 ), subject=None, role=None,
             )
@@ -207,30 +208,57 @@ def test_firing_transaction_rolls_back_before_and_after_run_staging(monkeypatch)
 
         original_create = WorkflowRunRepository.create_in_transaction
         monkeypatch.setattr(
-            "app.services.schedules.WorkflowRunRepository.create_in_transaction", fail_run
+            "app.services.schedules.WorkflowRunRepository.create_in_transaction",
+            fail_run,
         )
         async with factory() as session:
             with pytest.raises(RuntimeError, match="before run commit"):
                 await ScheduleRunner(session).tick(now)
         async with factory() as session:
-            assert await session.scalar(select(func.count()).select_from(WorkflowRunRecord)) == 0
-            assert await session.scalar(select(func.count()).select_from(WorkflowScheduleFiringRecord)) == 0
-            assert (await session.get(WorkflowScheduleRecord, schedule.id)).next_fire_at == now
+            assert (
+                await session.scalar(
+                    select(func.count()).select_from(WorkflowRunRecord)
+                )
+                == 0
+            )
+            assert (
+                await session.scalar(
+                    select(func.count()).select_from(WorkflowScheduleFiringRecord)
+                )
+                == 0
+            )
+            assert (
+                await session.get(WorkflowScheduleRecord, schedule.id)
+            ).next_fire_at == now
         monkeypatch.setattr(
             "app.services.schedules.WorkflowRunRepository.create_in_transaction",
             original_create,
         )
         async with factory() as session:
             assert await ScheduleRunner(session).tick(now) == 1
-            assert await session.scalar(select(func.count()).select_from(WorkflowRunRecord)) == 1
-            assert await session.scalar(select(func.count()).select_from(WorkflowScheduleFiringRecord)) == 1
+            assert (
+                await session.scalar(
+                    select(func.count()).select_from(WorkflowRunRecord)
+                )
+                == 1
+            )
+            assert (
+                await session.scalar(
+                    select(func.count()).select_from(WorkflowScheduleFiringRecord)
+                )
+                == 1
+            )
 
         async with factory() as session:
             second = await ScheduleRepository(session).create(
                 ScheduleCreate(
-                    workflow_id="scheduled-workflow", schedule_type=ScheduleType.INTERVAL,
-                    interval_seconds=60, next_fire_at=now,
-                ), subject=None, role=None,
+                    workflow_id="scheduled-workflow",
+                    schedule_type=ScheduleType.INTERVAL,
+                    interval_seconds=60,
+                    next_fire_at=now,
+                ),
+                subject=None,
+                role=None,
             )
         from app.services import schedules as schedule_service
 
@@ -244,8 +272,15 @@ def test_firing_transaction_rolls_back_before_and_after_run_staging(monkeypatch)
                 await ScheduleRunner(session).tick(now)
         monkeypatch.setattr(schedule_service, "_next_fire", original_next_fire)
         async with factory() as session:
-            assert (await session.get(WorkflowScheduleRecord, second.id)).next_fire_at == now
-            assert await session.scalar(select(func.count()).select_from(WorkflowRunRecord)) == 1
+            assert (
+                await session.get(WorkflowScheduleRecord, second.id)
+            ).next_fire_at == now
+            assert (
+                await session.scalar(
+                    select(func.count()).select_from(WorkflowRunRecord)
+                )
+                == 1
+            )
             await session.rollback()
             assert await ScheduleRunner(session).tick(now) == 1
 

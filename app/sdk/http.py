@@ -36,6 +36,8 @@ def build_headers(token: str | None, user_agent: str | None) -> dict[str, str]:
 
 
 def parse_json(response: httpx.Response) -> Any:
+    if response.status_code == 204 or not response.content:
+        return None
     try:
         return response.json()
     except ValueError as exc:

@@ -93,7 +93,10 @@ class ScheduleRepository:
                     else getattr(update, field),
                 )
             record.next_fire_at = _next_fire(_schedule(record), datetime.now(UTC))
-        return _schedule(record)
+            await self.session.flush()
+            await self.session.refresh(record)
+            result = _schedule(record)
+        return result
 
     async def set_enabled(self, schedule_id: str, enabled: bool) -> WorkflowSchedule:
         async with self.session.begin():
@@ -105,7 +108,10 @@ class ScheduleRepository:
             record.enabled = enabled
             if enabled:
                 record.next_fire_at = _next_fire(_schedule(record), datetime.now(UTC))
-        return _schedule(record)
+            await self.session.flush()
+            await self.session.refresh(record)
+            result = _schedule(record)
+        return result
 
     async def delete(self, schedule_id: str) -> None:
         async with self.session.begin():
@@ -118,7 +124,10 @@ class ScheduleRepository:
 
 
 class ScheduleRunner:
-    """Claims due schedules with PostgreSQL row locks and records one firing per slot."""
+    """Claim due schedules with PostgreSQL row locks.
+
+    One durable firing is recorded for each claimed occurrence.
+    """
 
     def __init__(self, session: AsyncSession) -> None:
         self.session = session

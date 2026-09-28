@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 
-from app.sdk import AsyncFluxionClient, FluxionClient
+from app.sdk import AsyncFluxionClient, FluxionAPIError, FluxionClient
 
 
 def _schedule(*, revision: int | None = None) -> dict:
@@ -33,24 +33,36 @@ def test_sync_schedule_lifecycle_serializes_revision_and_parses_models() -> None
         requests.append(request)
         if request.url.path == "/api/v1/schedules" and request.method == "GET":
             return httpx.Response(
-                200, json={"items": [_schedule()], "limit": 100, "offset": 0, "count": 1}
+                200,
+                json={"items": [_schedule()], "limit": 100, "offset": 0, "count": 1},
             )
         if request.method == "DELETE":
             return httpx.Response(204)
         return httpx.Response(200, json=_schedule(revision=1))
 
-    with FluxionClient("https://example.test", transport=httpx.MockTransport(handler)) as client:
+    with FluxionClient(
+        "https://example.test", transport=httpx.MockTransport(handler)
+    ) as client:
         cron = client.create_schedule(
-            workflow_id="workflow-1", schedule_type="CRON", cron_expression="0 9 * * *", revision=1
+            workflow_id="workflow-1",
+            schedule_type="CRON",
+            cron_expression="0 9 * * *",
+            revision=1,
         )
         latest = client.create_schedule(
-            workflow_id="workflow-1", schedule_type="INTERVAL", interval_seconds=60, revision=None
+            workflow_id="workflow-1",
+            schedule_type="INTERVAL",
+            interval_seconds=60,
+            revision=None,
         )
         assert cron.workflow_revision == 1
         assert latest.next_fire_at.tzinfo is not None
         assert client.get_schedule("schedule-1").timezone == "Asia/Kolkata"
         assert client.list_schedules().items[0].misfire_policy == "FIRE_ONCE"
-        assert client.update_schedule("schedule-1", interval_seconds=120).interval_seconds == 60
+        assert (
+            client.update_schedule("schedule-1", interval_seconds=120).interval_seconds
+            == 60
+        )
         assert client.pause_schedule("schedule-1").enabled
         assert client.resume_schedule("schedule-1").enabled
         client.delete_schedule("schedule-1")
@@ -67,15 +79,21 @@ async def test_async_schedule_lifecycle_serializes_revision_and_parses_models() 
         requests.append(request)
         if request.url.path == "/api/v1/schedules" and request.method == "GET":
             return httpx.Response(
-                200, json={"items": [_schedule()], "limit": 100, "offset": 0, "count": 1}
+                200,
+                json={"items": [_schedule()], "limit": 100, "offset": 0, "count": 1},
             )
         if request.method == "DELETE":
             return httpx.Response(204)
         return httpx.Response(200, json=_schedule(revision=None))
 
-    async with AsyncFluxionClient("https://example.test", transport=httpx.MockTransport(handler)) as client:
+    async with AsyncFluxionClient(
+        "https://example.test", transport=httpx.MockTransport(handler)
+    ) as client:
         created = await client.create_schedule(
-            workflow_id="workflow-1", schedule_type="INTERVAL", interval_seconds=60, revision=None
+            workflow_id="workflow-1",
+            schedule_type="INTERVAL",
+            interval_seconds=60,
+            revision=None,
         )
         assert created.workflow_revision is None
         assert (await client.get_schedule("schedule-1")).enabled
@@ -86,3 +104,17 @@ async def test_async_schedule_lifecycle_serializes_revision_and_parses_models() 
         await client.delete_schedule("schedule-1")
 
     assert "workflow_revision" not in json.loads(requests[0].content)
+
+
+def test_empty_success_is_accepted_but_nonempty_malformed_json_is_rejected() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "DELETE":
+            return httpx.Response(204)
+        return httpx.Response(200, text="not-json")
+
+    with FluxionClient(
+        "https://example.test", transport=httpx.MockTransport(handler)
+    ) as client:
+        client.delete_schedule("schedule-1")
+        with pytest.raises(FluxionAPIError, match="malformed JSON"):
+            client.get_schedule("schedule-1")
