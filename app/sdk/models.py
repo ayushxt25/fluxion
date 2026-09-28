@@ -128,6 +128,34 @@ class WorkflowScheduleList(SDKModel):
     count: int
 
 
+class EventSubscription(SDKModel):
+    id: str
+    workflow_id: str
+    workflow_revision: int | None
+    event_type: str
+    filter_json: dict[str, Any] | None
+    pass_event_payload_as_input: bool
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
+    created_by_subject: str | None
+    created_by_role: str | None
+
+
+class EventSubscriptionList(SDKModel):
+    items: tuple[EventSubscription, ...]
+    limit: int
+    offset: int
+    count: int
+
+
+class EventIngestResult(SDKModel):
+    trigger_event_id: str
+    created: bool
+    matched_subscriptions: int
+    run_ids: tuple[str, ...]
+
+
 class WorkflowList(SDKModel):
     items: tuple[Workflow, ...]
     limit: int
@@ -153,6 +181,8 @@ class WorkflowRun(SDKModel):
     workflow_revision: int = 1
     schedule_id: str | None = None
     scheduled_for: datetime | None = None
+    trigger_event_id: str | None = None
+    event_subscription_id: str | None = None
     status: str
     created_at: datetime
     input: JSONValue = None

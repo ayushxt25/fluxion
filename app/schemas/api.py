@@ -72,6 +72,8 @@ class WorkflowRunResponse(BaseModel):
     workflow_revision: int = 1
     schedule_id: str | None = None
     scheduled_for: datetime | None = None
+    trigger_event_id: str | None = None
+    event_subscription_id: str | None = None
     status: str
     created_at: datetime
     input: Any = None

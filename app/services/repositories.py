@@ -484,6 +484,8 @@ class WorkflowRunRepository:
             input_present=workflow_run.workflow_input_present,
             schedule_id=workflow_run.schedule_id,
             scheduled_for=workflow_run.scheduled_for,
+            trigger_event_id=workflow_run.trigger_event_id,
+            event_subscription_id=workflow_run.event_subscription_id,
         )
         self._session.add(record)
         await self._session.flush()
@@ -575,6 +577,8 @@ class WorkflowRunRepository:
                     workflow_input_present=record.input_present,
                     schedule_id=record.schedule_id,
                     scheduled_for=record.scheduled_for,
+                    trigger_event_id=record.trigger_event_id,
+                    event_subscription_id=record.event_subscription_id,
                 )
                 workflow_run.workflow_revision = record.workflow_revision
                 return workflow_run

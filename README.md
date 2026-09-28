@@ -105,6 +105,15 @@ or resumed. Run `fluxion-schedule-runner` (or Compose maintenance profile) to
 process due schedules. PostgreSQL firing identities prevent concurrent runners
 from creating duplicate logical fires.
 
+## Durable event triggers
+
+Create subscriptions at `/api/v1/event-subscriptions` and ingest authenticated
+events at `/api/v1/events/ingest`. The required `(source, external_event_id)`
+pair is the durable idempotency key. Subscriptions match exact top-level JSON
+filter fields; an explicit revision stays pinned, while a null revision resolves
+the latest immutable definition when the event is accepted. Set
+`pass_event_payload_as_input` only when the event payload should become run input.
+
 ## Run Events (SSE)
 
 New runs persist compact, ordered state-change events in PostgreSQL. Watch them

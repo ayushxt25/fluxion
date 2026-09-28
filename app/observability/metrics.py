@@ -275,6 +275,20 @@ def record_task_log_validation_failed() -> None:
     registry.inc_counter("fluxion_task_log_validation_failures_total")
 
 
+def record_trigger_event_ingested(outcome: str) -> None:
+    registry.inc_counter("fluxion_trigger_events_ingested_total", {"outcome": outcome})
+
+
+def record_event_firing(outcome: str) -> None:
+    registry.inc_counter("fluxion_event_firings_total", {"outcome": outcome})
+
+
+def record_event_filter_result(matched: bool) -> None:
+    registry.inc_counter(
+        "fluxion_event_filter_results_total", {"matched": str(matched).lower()}
+    )
+
+
 def _labels(labels: dict[str, str] | None) -> tuple[tuple[str, str], ...]:
     return tuple(sorted((labels or {}).items()))
 

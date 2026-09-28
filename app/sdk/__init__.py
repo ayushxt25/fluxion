@@ -15,6 +15,9 @@ from app.sdk.errors import (
 )
 from app.sdk.models import (
     DependencyResultParameter,
+    EventIngestResult,
+    EventSubscription,
+    EventSubscriptionList,
     RetentionCategorySummary,
     RetentionSummary,
     Retry,
@@ -45,6 +48,9 @@ __all__ = [
     "AuthenticationError",
     "ConflictError",
     "DependencyResultParameter",
+    "EventIngestResult",
+    "EventSubscription",
+    "EventSubscriptionList",
     "FluxionAPIError",
     "FluxionClient",
     "FluxionConnectionError",

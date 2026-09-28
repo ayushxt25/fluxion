@@ -17,6 +17,9 @@ from app.sdk.http import (
     raise_for_response,
 )
 from app.sdk.models import (
+    EventIngestResult,
+    EventSubscription,
+    EventSubscriptionList,
     AuditEventList,
     Health,
     LeaseReapResult,
@@ -236,6 +239,32 @@ class AsyncFluxionClient:
 
     async def delete_schedule(self, schedule_id: str) -> None:
         await self._request("DELETE", f"/api/v1/schedules/{schedule_id}")
+
+    async def create_event_subscription(self, **payload: Any) -> EventSubscription:
+        _translate_schedule_revision(payload)
+        return await self._model("POST", "/api/v1/event-subscriptions", EventSubscription, json=payload)
+
+    async def get_event_subscription(self, subscription_id: str) -> EventSubscription:
+        return await self._model("GET", f"/api/v1/event-subscriptions/{subscription_id}", EventSubscription)
+
+    async def list_event_subscriptions(self, *, limit: int = 50, offset: int = 0) -> EventSubscriptionList:
+        return await self._model("GET", "/api/v1/event-subscriptions", EventSubscriptionList, params={"limit": limit, "offset": offset})
+
+    async def update_event_subscription(self, subscription_id: str, **payload: Any) -> EventSubscription:
+        _translate_schedule_revision(payload)
+        return await self._model("PATCH", f"/api/v1/event-subscriptions/{subscription_id}", EventSubscription, json=payload)
+
+    async def pause_event_subscription(self, subscription_id: str) -> EventSubscription:
+        return await self._model("POST", f"/api/v1/event-subscriptions/{subscription_id}/pause", EventSubscription)
+
+    async def resume_event_subscription(self, subscription_id: str) -> EventSubscription:
+        return await self._model("POST", f"/api/v1/event-subscriptions/{subscription_id}/resume", EventSubscription)
+
+    async def delete_event_subscription(self, subscription_id: str) -> None:
+        await self._request("DELETE", f"/api/v1/event-subscriptions/{subscription_id}")
+
+    async def ingest_event(self, **payload: Any) -> EventIngestResult:
+        return await self._model("POST", "/api/v1/events/ingest", EventIngestResult, json=payload)
     async def get_run(self, run_id: str) -> WorkflowRun:
         return await self._model("GET", f"/api/v1/runs/{run_id}", WorkflowRun)
 

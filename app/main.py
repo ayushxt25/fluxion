@@ -12,6 +12,7 @@ from app.api.routes.observability import router as observability_router
 from app.api.routes.operations import router as operations_router
 from app.api.routes.runs import router as runs_router
 from app.api.routes.schedules import router as schedules_router
+from app.api.routes.triggers import ingest_router, router as triggers_router
 from app.api.routes.webhooks import (
     delivery_router as webhook_deliveries_router,
 )
@@ -59,6 +60,8 @@ def create_app() -> FastAPI:
     app.include_router(workflows_router, prefix="/api/v1")
     app.include_router(runs_router, prefix="/api/v1")
     app.include_router(schedules_router, prefix="/api/v1")
+    app.include_router(triggers_router, prefix="/api/v1")
+    app.include_router(ingest_router, prefix="/api/v1")
     app.include_router(logs_router, prefix="/api/v1")
     app.include_router(events_router, prefix="/api/v1")
     app.include_router(operations_router, prefix="/api/v1")

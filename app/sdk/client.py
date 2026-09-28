@@ -15,6 +15,9 @@ from app.sdk.http import (
     raise_for_response,
 )
 from app.sdk.models import (
+    EventIngestResult,
+    EventSubscription,
+    EventSubscriptionList,
     AuditEventList,
     Health,
     LeaseReapResult,
@@ -225,6 +228,32 @@ class FluxionClient:
 
     def delete_schedule(self, schedule_id: str) -> None:
         self._request("DELETE", f"/api/v1/schedules/{schedule_id}")
+
+    def create_event_subscription(self, **payload: Any) -> EventSubscription:
+        _translate_schedule_revision(payload)
+        return self._model("POST", "/api/v1/event-subscriptions", EventSubscription, json=payload)
+
+    def get_event_subscription(self, subscription_id: str) -> EventSubscription:
+        return self._model("GET", f"/api/v1/event-subscriptions/{subscription_id}", EventSubscription)
+
+    def list_event_subscriptions(self, *, limit: int = 50, offset: int = 0) -> EventSubscriptionList:
+        return self._model("GET", "/api/v1/event-subscriptions", EventSubscriptionList, params={"limit": limit, "offset": offset})
+
+    def update_event_subscription(self, subscription_id: str, **payload: Any) -> EventSubscription:
+        _translate_schedule_revision(payload)
+        return self._model("PATCH", f"/api/v1/event-subscriptions/{subscription_id}", EventSubscription, json=payload)
+
+    def pause_event_subscription(self, subscription_id: str) -> EventSubscription:
+        return self._model("POST", f"/api/v1/event-subscriptions/{subscription_id}/pause", EventSubscription)
+
+    def resume_event_subscription(self, subscription_id: str) -> EventSubscription:
+        return self._model("POST", f"/api/v1/event-subscriptions/{subscription_id}/resume", EventSubscription)
+
+    def delete_event_subscription(self, subscription_id: str) -> None:
+        self._request("DELETE", f"/api/v1/event-subscriptions/{subscription_id}")
+
+    def ingest_event(self, **payload: Any) -> EventIngestResult:
+        return self._model("POST", "/api/v1/events/ingest", EventIngestResult, json=payload)
     def get_run(self, run_id: str) -> WorkflowRun:
         return self._model("GET", f"/api/v1/runs/{run_id}", WorkflowRun)
 

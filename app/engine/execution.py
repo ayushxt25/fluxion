@@ -73,6 +73,8 @@ class WorkflowRun:
         workflow_input_present: bool = False,
         schedule_id: str | None = None,
         scheduled_for: datetime | None = None,
+        trigger_event_id: str | None = None,
+        event_subscription_id: str | None = None,
     ) -> None:
         self.run_id = run_id
         self.workflow_id = workflow.id
@@ -83,6 +85,8 @@ class WorkflowRun:
         self.workflow_input_present = workflow_input_present
         self.schedule_id = schedule_id
         self.scheduled_for = scheduled_for
+        self.trigger_event_id = trigger_event_id
+        self.event_subscription_id = event_subscription_id
         self._task_runs = {
             task_id: TaskRun(
                 task_id=task_id,
@@ -104,6 +108,8 @@ class WorkflowRun:
         workflow_input_present: bool = False,
         schedule_id: str | None = None,
         scheduled_for: datetime | None = None,
+        trigger_event_id: str | None = None,
+        event_subscription_id: str | None = None,
     ) -> "WorkflowRun":
         return cls(
             run_id=run_id,
@@ -113,6 +119,8 @@ class WorkflowRun:
             workflow_input_present=workflow_input_present,
             schedule_id=schedule_id,
             scheduled_for=scheduled_for,
+            trigger_event_id=trigger_event_id,
+            event_subscription_id=event_subscription_id,
         )
 
     @classmethod
@@ -131,6 +139,8 @@ class WorkflowRun:
         dag: WorkflowDAG | None = None,
         schedule_id: str | None = None,
         scheduled_for: datetime | None = None,
+        trigger_event_id: str | None = None,
+        event_subscription_id: str | None = None,
     ) -> "WorkflowRun":
         workflow_dag = dag or WorkflowDAG(workflow)
         expected_task_ids = set(workflow_dag.topological_order())
@@ -150,6 +160,8 @@ class WorkflowRun:
             workflow_input_present=workflow_input_present,
             schedule_id=schedule_id,
             scheduled_for=scheduled_for,
+            trigger_event_id=trigger_event_id,
+            event_subscription_id=event_subscription_id,
         )
         workflow_run._status = status
         workflow_run._task_runs = {

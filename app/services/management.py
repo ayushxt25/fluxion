@@ -255,6 +255,8 @@ def _run_response(
         workflow_revision=workflow_run.workflow_revision,
         schedule_id=workflow_run.schedule_id,
         scheduled_for=workflow_run.scheduled_for,
+        trigger_event_id=workflow_run.trigger_event_id,
+        event_subscription_id=workflow_run.event_subscription_id,
         status=workflow_run.status.value,
         created_at=created_at,
         input=(
