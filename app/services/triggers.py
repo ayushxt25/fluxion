@@ -23,8 +23,8 @@ class EventSubscriptionRepository:
         self.session = session
 
     async def create(self, request: EventSubscriptionCreate, *, subject: str | None, role: str | None) -> EventSubscription:
-        await _resolve(self.session, request.workflow_id, request.workflow_revision)
         async with self.session.begin():
+            await _resolve(self.session, request.workflow_id, request.workflow_revision)
             row = WorkflowEventSubscriptionRecord(id=str(uuid4()), workflow_id=request.workflow_id, workflow_revision=request.workflow_revision, event_type=request.event_type, filter_json=request.filter_json, pass_event_payload_as_input=request.pass_event_payload_as_input, created_by_subject=subject, created_by_role=role)
             self.session.add(row)
             await self.session.flush()
@@ -140,7 +140,16 @@ async def _resolve(session: AsyncSession, workflow_id: str, revision: int | None
 
 
 def _matches(filter_json: dict | None, payload: object) -> bool:
-    return filter_json is None or (isinstance(payload, dict) and all(payload.get(key) == value for key, value in filter_json.items()))
+    if filter_json is None:
+        return True
+    if not isinstance(payload, dict):
+        return False
+    return all(
+        key in payload
+        and type(payload[key]) is type(expected)
+        and payload[key] == expected
+        for key, expected in filter_json.items()
+    )
 
 
 def _subscription(row: WorkflowEventSubscriptionRecord) -> EventSubscription:
