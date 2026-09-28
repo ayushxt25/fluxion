@@ -68,7 +68,7 @@ def test_sync_schedule_lifecycle_serializes_revision_and_parses_models() -> None
         client.delete_schedule("schedule-1")
 
     assert json.loads(requests[0].content)["workflow_revision"] == 1
-    assert "workflow_revision" not in json.loads(requests[1].content)
+    assert json.loads(requests[1].content)["workflow_revision"] is None
 
 
 @pytest.mark.asyncio
@@ -103,7 +103,7 @@ async def test_async_schedule_lifecycle_serializes_revision_and_parses_models() 
         await client.resume_schedule("schedule-1")
         await client.delete_schedule("schedule-1")
 
-    assert "workflow_revision" not in json.loads(requests[0].content)
+    assert json.loads(requests[0].content)["workflow_revision"] is None
 
 
 def test_empty_success_is_accepted_but_nonempty_malformed_json_is_rejected() -> None:
