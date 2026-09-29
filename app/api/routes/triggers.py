@@ -62,7 +62,13 @@ async def create_subscription(
     subscription = await EventSubscriptionRepository(session).create(
         request, subject=principal.subject, role=principal.role.value
     )
-    await _audit(session, http_request, principal, "event_subscription.create", subscription)
+    await _audit(
+        session,
+        http_request,
+        principal,
+        "event_subscription.create",
+        subscription,
+    )
     return subscription
 
 
@@ -77,7 +83,12 @@ async def list_subscriptions(
     offset: OffsetQuery = 0,
 ) -> EventSubscriptionList:
     rows = await EventSubscriptionRepository(session).list(limit, offset)
-    return EventSubscriptionList(items=rows, limit=limit, offset=offset, count=len(rows))
+    return EventSubscriptionList(
+        items=rows,
+        limit=limit,
+        offset=offset,
+        count=len(rows),
+    )
 
 
 @router.get(
@@ -104,8 +115,17 @@ async def update_subscription(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: Annotated[Principal, Depends(get_current_principal)],
 ) -> EventSubscription:
-    subscription = await EventSubscriptionRepository(session).update(subscription_id, request)
-    await _audit(session, http_request, principal, "event_subscription.update", subscription)
+    subscription = await EventSubscriptionRepository(session).update(
+        subscription_id,
+        request,
+    )
+    await _audit(
+        session,
+        http_request,
+        principal,
+        "event_subscription.update",
+        subscription,
+    )
     return subscription
 
 
@@ -116,7 +136,10 @@ async def _set_enabled(
     session: AsyncSession,
     principal: Principal,
 ) -> EventSubscription:
-    subscription = await EventSubscriptionRepository(session).set_enabled(subscription_id, enabled)
+    subscription = await EventSubscriptionRepository(session).set_enabled(
+        subscription_id,
+        enabled,
+    )
     action = "event_subscription.resume" if enabled else "event_subscription.pause"
     await _audit(session, request, principal, action, subscription)
     return subscription
@@ -161,7 +184,10 @@ async def delete_subscription(
     session: Annotated[AsyncSession, Depends(get_db_session)],
     principal: Annotated[Principal, Depends(get_current_principal)],
 ) -> None:
-    subscription = await EventSubscriptionRepository(session).set_enabled(subscription_id, False)
+    subscription = await EventSubscriptionRepository(session).set_enabled(
+        subscription_id,
+        False,
+    )
     await _audit(session, request, principal, "event_subscription.delete", subscription)
 
 

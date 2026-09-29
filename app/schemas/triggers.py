@@ -14,7 +14,9 @@ class EventSubscriptionCreate(BaseModel):
     @field_validator("filter_json")
     @classmethod
     def validate_filter(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
-        if value is not None and any(isinstance(item, (dict, list)) for item in value.values()):
+        if value is not None and any(
+            isinstance(item, (dict, list)) for item in value.values()
+        ):
             raise ValueError("filter_json supports exact top-level scalar values only.")
         return value
 

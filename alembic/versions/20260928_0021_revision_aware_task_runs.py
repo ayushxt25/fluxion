@@ -1,6 +1,7 @@
 """Make durable task runs reference immutable revision tasks."""
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "20260928_0021"
@@ -50,9 +51,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    unsafe = op.get_bind().execute(
-        sa.text("SELECT 1 FROM task_runs WHERE workflow_revision > 1 LIMIT 1")
-    ).first()
+    unsafe = (
+        op.get_bind()
+        .execute(sa.text("SELECT 1 FROM task_runs WHERE workflow_revision > 1 LIMIT 1"))
+        .first()
+    )
     if unsafe:
         raise RuntimeError(
             "Cannot downgrade revision-aware task runs with revision > 1 data."

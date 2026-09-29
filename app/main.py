@@ -12,7 +12,8 @@ from app.api.routes.observability import router as observability_router
 from app.api.routes.operations import router as operations_router
 from app.api.routes.runs import router as runs_router
 from app.api.routes.schedules import router as schedules_router
-from app.api.routes.triggers import ingest_router, router as triggers_router
+from app.api.routes.triggers import ingest_router
+from app.api.routes.triggers import router as triggers_router
 from app.api.routes.webhooks import (
     delivery_router as webhook_deliveries_router,
 )

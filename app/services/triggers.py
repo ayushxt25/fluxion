@@ -41,12 +41,14 @@ class EventSubscriptionRepository:
         async with self.session.begin():
             await _resolve(self.session, request.workflow_id, request.workflow_revision)
             row = WorkflowEventSubscriptionRecord(
-                id=str(uuid4()), workflow_id=request.workflow_id,
+                id=str(uuid4()),
+                workflow_id=request.workflow_id,
                 workflow_revision=request.workflow_revision,
                 event_type=request.event_type,
                 filter_json=request.filter_json,
                 pass_event_payload_as_input=request.pass_event_payload_as_input,
-                created_by_subject=subject, created_by_role=role,
+                created_by_subject=subject,
+                created_by_role=role,
             )
             self.session.add(row)
             await self.session.flush()
@@ -68,7 +70,8 @@ class EventSubscriptionRepository:
             result = await self.session.execute(
                 select(WorkflowEventSubscriptionRecord)
                 .order_by(WorkflowEventSubscriptionRecord.id)
-                .limit(limit).offset(offset)
+                .limit(limit)
+                .offset(offset)
             )
             return tuple(_subscription(row) for row in result.scalars())
 
@@ -115,13 +118,18 @@ class EventIngestionService:
     async def ingest(self, request: EventIngestRequest) -> EventIngestResponse:
         async with self.session.begin():
             event_id = str(uuid4())
-            statement = insert(WorkflowTriggerEventRecord).values(
-                id=event_id, source=request.source,
-                external_event_id=request.external_event_id,
-                event_type=request.event_type, payload_json=request.payload,
-            ).on_conflict_do_nothing(
-                index_elements=("source", "external_event_id")
-            ).returning(WorkflowTriggerEventRecord.id)
+            statement = (
+                insert(WorkflowTriggerEventRecord)
+                .values(
+                    id=event_id,
+                    source=request.source,
+                    external_event_id=request.external_event_id,
+                    event_type=request.event_type,
+                    payload_json=request.payload,
+                )
+                .on_conflict_do_nothing(index_elements=("source", "external_event_id"))
+                .returning(WorkflowTriggerEventRecord.id)
+            )
             inserted_id = await self.session.scalar(statement)
             if inserted_id is None:
                 return await self._duplicate_response(request)
@@ -175,17 +183,25 @@ class EventIngestionService:
                 subscription.workflow_revision,
             )
             run = WorkflowRun.create(
-                str(uuid4()), workflow,
+                str(uuid4()),
+                workflow,
                 workflow_input=(
-                    request.payload if subscription.pass_event_payload_as_input else None
+                    request.payload
+                    if subscription.pass_event_payload_as_input
+                    else None
                 ),
                 workflow_input_present=subscription.pass_event_payload_as_input,
-                trigger_event_id=event.id, event_subscription_id=subscription.id,
+                trigger_event_id=event.id,
+                event_subscription_id=subscription.id,
             )
-            self.session.add(WorkflowEventFiringRecord(
-                id=str(uuid4()), subscription_id=subscription.id,
-                trigger_event_id=event.id, run_id=run.run_id,
-            ))
+            self.session.add(
+                WorkflowEventFiringRecord(
+                    id=str(uuid4()),
+                    subscription_id=subscription.id,
+                    trigger_event_id=event.id,
+                    run_id=run.run_id,
+                )
+            )
             await WorkflowRunRepository(self.session).create_in_transaction(run)
             record_event_firing("success")
             run_ids.append(run.run_id)
@@ -216,20 +232,24 @@ def _matches(filter_json: dict | None, payload: object) -> bool:
     if not isinstance(payload, dict):
         return False
     return all(
-        key in payload
-        and type(payload[key]) is type(value)
-        and payload[key] == value
+        key in payload and type(payload[key]) is type(value) and payload[key] == value
         for key, value in filter_json.items()
     )
 
 
 def _subscription(row: WorkflowEventSubscriptionRecord) -> EventSubscription:
-    return EventSubscription.model_validate({
-        "id": row.id, "workflow_id": row.workflow_id,
-        "workflow_revision": row.workflow_revision, "event_type": row.event_type,
-        "filter_json": row.filter_json,
-        "pass_event_payload_as_input": row.pass_event_payload_as_input,
-        "enabled": row.enabled, "created_at": row.created_at,
-        "updated_at": row.updated_at, "created_by_subject": row.created_by_subject,
-        "created_by_role": row.created_by_role,
-    })
+    return EventSubscription.model_validate(
+        {
+            "id": row.id,
+            "workflow_id": row.workflow_id,
+            "workflow_revision": row.workflow_revision,
+            "event_type": row.event_type,
+            "filter_json": row.filter_json,
+            "pass_event_payload_as_input": row.pass_event_payload_as_input,
+            "enabled": row.enabled,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+            "created_by_subject": row.created_by_subject,
+            "created_by_role": row.created_by_role,
+        }
+    )
