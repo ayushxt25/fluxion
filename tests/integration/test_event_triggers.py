@@ -34,24 +34,59 @@ def test_event_trigger_idempotency_and_revision_pinning() -> None:
                 repository = WorkflowRepository(session)
                 await repository.save(workflow)
                 pinned = await EventSubscriptionRepository(session).create(
-                    EventSubscriptionCreate(workflow_id=workflow.id, workflow_revision=1, event_type="deploy", filter_json={"environment": "prod"}),
-                    subject="operator", role="OPERATOR",
+                    EventSubscriptionCreate(
+                        workflow_id=workflow.id,
+                        workflow_revision=1,
+                        event_type="deploy",
+                        filter_json={"environment": "prod"},
+                    ),
+                    subject="operator",
+                    role="OPERATOR",
                 )
                 latest = await EventSubscriptionRepository(session).create(
-                    EventSubscriptionCreate(workflow_id=workflow.id, event_type="deploy", pass_event_payload_as_input=True),
-                    subject=None, role=None,
+                    EventSubscriptionCreate(
+                        workflow_id=workflow.id,
+                        event_type="deploy",
+                        pass_event_payload_as_input=True,
+                    ),
+                    subject=None,
+                    role=None,
                 )
-                await repository.publish(WorkflowDefinition(id=workflow.id, name="two", tasks=(TaskDefinition(id="two"),)))
-                request = EventIngestRequest(source="ci", external_event_id="evt-1", event_type="deploy", payload={"environment": "prod"})
+                assert pinned.workflow_revision == 1
+                await repository.publish(
+                    WorkflowDefinition(
+                        id=workflow.id,
+                        name="two",
+                        tasks=(TaskDefinition(id="two"),),
+                    )
+                )
+                request = EventIngestRequest(
+                    source="ci",
+                    external_event_id="evt-1",
+                    event_type="deploy",
+                    payload={"environment": "prod"},
+                )
                 first = await EventIngestionService(session).ingest(request)
                 duplicate = await EventIngestionService(session).ingest(request)
                 assert first.created and not duplicate.created
                 assert set(first.run_ids) == set(duplicate.run_ids)
-                rows = tuple((await session.execute(select(WorkflowRunRecord))).scalars())
+                rows = tuple(
+                    (await session.execute(select(WorkflowRunRecord))).scalars()
+                )
                 assert sorted(row.workflow_revision for row in rows) == [1, 2]
                 assert any(row.event_subscription_id == latest.id for row in rows)
-                assert await session.scalar(select(func.count()).select_from(WorkflowTriggerEventRecord)) == 1
-                assert await session.scalar(select(func.count()).select_from(WorkflowEventFiringRecord)) == 2
+                assert (
+                    await session.scalar(
+                        select(func.count()).select_from(WorkflowTriggerEventRecord)
+                    )
+                    == 1
+                )
+                assert (
+                    await session.scalar(
+                        select(func.count()).select_from(WorkflowEventFiringRecord)
+                    )
+                    == 2
+                )
         finally:
             await engine.dispose()
 
@@ -85,7 +120,9 @@ def test_revision_two_with_different_task_id_initializes_task_runs() -> None:
 
                 run = WorkflowRun.create("revision-two", second)
                 await WorkflowRunRepository(session).create(run)
-                task_rows = tuple((await session.execute(select(TaskRunRecord))).scalars())
+                task_rows = tuple(
+                    (await session.execute(select(TaskRunRecord))).scalars()
+                )
                 assert task_rows[0].workflow_revision == 2
                 assert task_rows[0].task_id == "two"
             async with factory() as reload_session:
