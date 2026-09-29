@@ -42,7 +42,8 @@ class EventSubscriptionRepository:
             await _resolve(self.session, request.workflow_id, request.workflow_revision)
             row = WorkflowEventSubscriptionRecord(
                 id=str(uuid4()), workflow_id=request.workflow_id,
-                workflow_revision=request.workflow_revision, event_type=request.event_type,
+                workflow_revision=request.workflow_revision,
+                event_type=request.event_type,
                 filter_json=request.filter_json,
                 pass_event_payload_as_input=request.pass_event_payload_as_input,
                 created_by_subject=subject, created_by_role=role,
@@ -55,7 +56,9 @@ class EventSubscriptionRepository:
 
     async def get(self, subscription_id: str) -> EventSubscription:
         async with self.session.begin():
-            row = await self.session.get(WorkflowEventSubscriptionRecord, subscription_id)
+            row = await self.session.get(
+                WorkflowEventSubscriptionRecord, subscription_id
+            )
             if row is None:
                 raise WorkflowScheduleNotFoundError(subscription_id)
             return _subscription(row)
@@ -69,9 +72,15 @@ class EventSubscriptionRepository:
             )
             return tuple(_subscription(row) for row in result.scalars())
 
-    async def update(self, subscription_id: str, update: EventSubscriptionUpdate) -> EventSubscription:
+    async def update(
+        self, subscription_id: str, update: EventSubscriptionUpdate
+    ) -> EventSubscription:
         async with self.session.begin():
-            row = await self.session.get(WorkflowEventSubscriptionRecord, subscription_id, with_for_update=True)
+            row = await self.session.get(
+                WorkflowEventSubscriptionRecord,
+                subscription_id,
+                with_for_update=True,
+            )
             if row is None:
                 raise WorkflowScheduleNotFoundError(subscription_id)
             for field in update.model_fields_set:
@@ -81,9 +90,15 @@ class EventSubscriptionRepository:
             result = _subscription(row)
         return result
 
-    async def set_enabled(self, subscription_id: str, enabled: bool) -> EventSubscription:
+    async def set_enabled(
+        self, subscription_id: str, enabled: bool
+    ) -> EventSubscription:
         async with self.session.begin():
-            row = await self.session.get(WorkflowEventSubscriptionRecord, subscription_id, with_for_update=True)
+            row = await self.session.get(
+                WorkflowEventSubscriptionRecord,
+                subscription_id,
+                with_for_update=True,
+            )
             if row is None:
                 raise WorkflowScheduleNotFoundError(subscription_id)
             row.enabled = enabled
@@ -114,11 +129,14 @@ class EventIngestionService:
             assert event is not None
             return await self._create_firings(event, request)
 
-    async def _duplicate_response(self, request: EventIngestRequest) -> EventIngestResponse:
+    async def _duplicate_response(
+        self, request: EventIngestRequest
+    ) -> EventIngestResponse:
         event = await self.session.scalar(
             select(WorkflowTriggerEventRecord).where(
                 WorkflowTriggerEventRecord.source == request.source,
-                WorkflowTriggerEventRecord.external_event_id == request.external_event_id,
+                WorkflowTriggerEventRecord.external_event_id
+                == request.external_event_id,
             )
         )
         assert event is not None
@@ -136,7 +154,9 @@ class EventIngestionService:
             run_ids=runs,
         )
 
-    async def _create_firings(self, event, request: EventIngestRequest) -> EventIngestResponse:
+    async def _create_firings(
+        self, event, request: EventIngestRequest
+    ) -> EventIngestResponse:
         result = await self.session.execute(
             select(WorkflowEventSubscriptionRecord)
             .where(WorkflowEventSubscriptionRecord.enabled.is_(True))
@@ -149,10 +169,16 @@ class EventIngestionService:
                 record_event_filter_result(False)
                 continue
             record_event_filter_result(True)
-            workflow = await _resolve(self.session, subscription.workflow_id, subscription.workflow_revision)
+            workflow = await _resolve(
+                self.session,
+                subscription.workflow_id,
+                subscription.workflow_revision,
+            )
             run = WorkflowRun.create(
                 str(uuid4()), workflow,
-                workflow_input=request.payload if subscription.pass_event_payload_as_input else None,
+                workflow_input=(
+                    request.payload if subscription.pass_event_payload_as_input else None
+                ),
                 workflow_input_present=subscription.pass_event_payload_as_input,
                 trigger_event_id=event.id, event_subscription_id=subscription.id,
             )
@@ -189,7 +215,12 @@ def _matches(filter_json: dict | None, payload: object) -> bool:
         return True
     if not isinstance(payload, dict):
         return False
-    return all(key in payload and type(payload[key]) is type(value) and payload[key] == value for key, value in filter_json.items())
+    return all(
+        key in payload
+        and type(payload[key]) is type(value)
+        and payload[key] == value
+        for key, value in filter_json.items()
+    )
 
 
 def _subscription(row: WorkflowEventSubscriptionRecord) -> EventSubscription:

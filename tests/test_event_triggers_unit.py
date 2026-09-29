@@ -8,7 +8,10 @@ from app.services.triggers import _matches
 def test_exact_top_level_filters_are_deterministic() -> None:
     assert _matches(None, {"environment": "prod"})
     assert _matches({"environment": "prod"}, {"environment": "prod"})
-    assert _matches({"environment": "prod", "severity": "critical"}, {"environment": "prod", "severity": "critical"})
+    assert _matches(
+        {"environment": "prod", "severity": "critical"},
+        {"environment": "prod", "severity": "critical"},
+    )
     assert not _matches({"environment": "prod"}, {})
     assert not _matches({"environment": "prod"}, {"environment": "dev"})
     assert not _matches({"enabled": True}, {"enabled": 1})

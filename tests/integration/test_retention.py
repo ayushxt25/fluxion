@@ -68,7 +68,13 @@ async def add_run(
 async def add_task_run(session, run_id: str) -> None:
     async with session.begin():
         if await session.get(WorkflowRevisionRecord, ("wf", 1)) is None:
-            session.add(WorkflowRevisionRecord(workflow_id="wf", revision=1, name="retention"))
+            session.add(
+                WorkflowRevisionRecord(
+                    workflow_id="wf",
+                    revision=1,
+                    name="retention",
+                )
+            )
             await session.flush()
         if await session.get(WorkflowRevisionTaskRecord, ("wf", 1, "task")) is None:
             session.add(
