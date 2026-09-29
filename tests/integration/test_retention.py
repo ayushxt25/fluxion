@@ -23,6 +23,7 @@ from app.db.models.workflow import (
     TaskDefinitionRecord,
     WorkflowDefinitionRecord,
     WorkflowRevisionRecord,
+    WorkflowRevisionTaskRecord,
 )
 from app.services.retention import RetentionRepository, RetentionService
 
@@ -66,12 +67,30 @@ async def add_run(
 
 async def add_task_run(session, run_id: str) -> None:
     async with session.begin():
-        session.add(TaskDefinitionRecord(workflow_id="wf", task_id="task"))
-    async with session.begin():
+        if await session.get(WorkflowRevisionRecord, ("wf", 1)) is None:
+            session.add(WorkflowRevisionRecord(workflow_id="wf", revision=1, name="retention"))
+            await session.flush()
+        if await session.get(WorkflowRevisionTaskRecord, ("wf", 1, "task")) is None:
+            session.add(
+                WorkflowRevisionTaskRecord(
+                    workflow_id="wf",
+                    revision=1,
+                    task_id="task",
+                    retry_max_attempts=1,
+                    retry_initial_backoff_seconds=0,
+                    retry_backoff_multiplier=1,
+                    retry_max_backoff_seconds=None,
+                    parameters=[],
+                )
+            )
+        if await session.get(TaskDefinitionRecord, ("wf", "task")) is None:
+            session.add(TaskDefinitionRecord(workflow_id="wf", task_id="task"))
+        await session.flush()
         session.add(
             TaskRunRecord(
                 run_id=run_id,
                 workflow_id="wf",
+                workflow_revision=1,
                 task_id="task",
                 status="SUCCEEDED",
                 idempotency_key=f"{run_id}:task",

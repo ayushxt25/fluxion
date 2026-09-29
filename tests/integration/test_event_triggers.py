@@ -88,7 +88,10 @@ def test_revision_two_with_different_task_id_initializes_task_runs() -> None:
                 task_rows = tuple((await session.execute(select(TaskRunRecord))).scalars())
                 assert task_rows[0].workflow_revision == 2
                 assert task_rows[0].task_id == "two"
-                loaded = await WorkflowRunRepository(session).get("revision-two", second)
+            async with factory() as reload_session:
+                loaded = await WorkflowRunRepository(reload_session).get(
+                    "revision-two", second
+                )
                 assert set(loaded.task_runs) == {"two"}
         finally:
             await engine.dispose()
