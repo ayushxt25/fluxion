@@ -359,6 +359,79 @@ def test_actionable_outbox_blocks_run_cleanup_until_discarded():
     in_db(body)
 
 
+def test_reconciled_actionable_outbox_preserves_execution_tree():
+    async def body(session):
+        old = datetime.now(UTC) - timedelta(days=31)
+        reconciled_at = datetime.now(UTC) - timedelta(minutes=5)
+        await add_run(session, "run", status="RUNNING")
+        await add_task_run(session, "run")
+        await add_attempt(session, "run")
+        async with session.begin():
+            session.add(
+                DispatchOutboxRecord(
+                    id="reconciled-outbox",
+                    event_type="task.dispatch",
+                    payload={},
+                    run_id="run",
+                    workflow_id="wf",
+                    task_id="task",
+                    attempt_number=1,
+                    created_at=old,
+                    published_at=None,
+                    last_reconciled_at=reconciled_at,
+                    reconcile_count=1,
+                )
+            )
+
+        summary = await retention(session).run_retention(
+            categories=("dispatch_outbox", "workflow_runs")
+        )
+        outbox = await session.get(DispatchOutboxRecord, "reconciled-outbox")
+
+        assert summary.total_deleted == 0
+        assert outbox is not None
+        assert outbox.reconcile_count == 1
+        assert outbox.last_reconciled_at == reconciled_at
+        assert await session.get(WorkflowRunRecord, "run") is not None
+        assert await session.get(TaskRunRecord, ("run", "task")) is not None
+        assert await session.get(TaskAttemptRecord, ("run", "task", 1)) is not None
+
+    in_db(body)
+
+
+def test_old_discarded_outbox_is_still_deleted_by_retention():
+    async def body(session):
+        old = datetime.now(UTC) - timedelta(days=31)
+        await add_run(session, "run", completed_at=old)
+        await add_task_run(session, "run")
+        async with session.begin():
+            session.add(
+                DispatchOutboxRecord(
+                    id="discarded-outbox",
+                    event_type="task.dispatch",
+                    payload={},
+                    run_id="run",
+                    workflow_id="wf",
+                    task_id="task",
+                    attempt_number=1,
+                    created_at=old,
+                    published_at=old,
+                    discarded_at=old,
+                    reconcile_count=1,
+                    last_reconciled_at=old,
+                )
+            )
+
+        summary = await retention(session).run_retention(
+            categories=("dispatch_outbox",)
+        )
+
+        assert summary.total_deleted == 1
+        assert await session.get(DispatchOutboxRecord, "discarded-outbox") is None
+
+    in_db(body)
+
+
 def test_audit_and_outbox_retention_are_bounded_and_idempotent():
     async def body(session):
         old = datetime.now(UTC) - timedelta(days=91)

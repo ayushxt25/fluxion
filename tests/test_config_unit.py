@@ -26,6 +26,9 @@ def test_service_loop_configuration_rejects_invalid_values() -> None:
         {"outbox_poll_seconds": 0},
         {"outbox_batch_size": 0},
         {"outbox_claim_seconds": 0},
+        {"dispatch_reconcile_after_seconds": 0},
+        {"dispatch_reconcile_batch_size": 0},
+        {"dispatch_reconcile_poll_interval_seconds": 0},
         {"lease_reaper_interval_seconds": 0},
         {"worker_concurrency": 0},
         {"worker_shutdown_grace_seconds": 0},
@@ -52,6 +55,14 @@ def test_worker_and_scheduler_configuration_accepts_bounded_values() -> None:
     assert settings.worker_concurrency == 2
     assert settings.scheduler_max_dispatch_per_run == 2
     assert settings.scheduler_max_dispatch_per_tick == 4
+
+
+def test_dispatch_reconciliation_settings_have_safe_defaults() -> None:
+    settings = Settings()
+
+    assert settings.dispatch_reconcile_after_seconds > 0
+    assert settings.dispatch_reconcile_batch_size > 0
+    assert settings.dispatch_reconcile_poll_interval_seconds > 0
 
 
 def test_observability_configuration_validation() -> None:

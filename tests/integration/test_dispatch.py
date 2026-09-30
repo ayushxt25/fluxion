@@ -35,7 +35,12 @@ from app.engine.execution import WorkflowRun
 from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
 from app.schemas.workflow import RetryPolicy, TaskDefinition, WorkflowDefinition
 from app.services.leases import LeaseReaper
-from app.services.outbox import DispatchOutboxPublisher, DispatchReconciliationService
+from app.services.management import WorkflowManagementService
+from app.services.outbox import (
+    DispatchOutboxPublisher,
+    DispatchReconciler,
+    DispatchReconciliationService,
+)
 from app.services.recovery import WorkflowRecoveryService
 from app.services.repositories import (
     DispatchOutboxRepository,
@@ -169,6 +174,282 @@ def test_outbox_publisher_publishes_and_marks_event() -> None:
         assert unpublished == ()
 
     run_in_db(body)
+
+
+def test_stale_published_dispatch_is_repaired_without_new_attempt() -> None:
+    async def body(session):
+        definition = workflow("wf-reconcile", task("a"))
+        await persist_run(session, definition)
+        dispatcher = InMemoryTaskDispatcher()
+        summary = await WorkflowScheduler(
+            WorkflowRepository(session),
+            WorkflowRunRepository(session),
+            TaskAttemptRepository(session),
+            dispatcher,
+        ).dispatch_ready("run-1")
+        event_id = summary.outbox_event_ids[0]
+        old = datetime.now(UTC) - timedelta(minutes=10)
+        await DispatchOutboxRepository(session).mark_published(event_id, old)
+
+        result = await DispatchReconciler(
+            DispatchOutboxRepository(session),
+            reconcile_after_seconds=60,
+            batch_size=10,
+        ).reconcile_once(datetime.now(UTC))
+
+        unpublished = await DispatchOutboxRepository(session).list_unpublished()
+        attempts = await TaskAttemptRepository(session).list_attempts("run-1", "a")
+        reissued = unpublished[0]
+
+        assert result.reconciled_event_ids == (event_id,)
+        assert reissued.id == event_id
+        assert reissued.published_at is None
+        assert reissued.reconcile_count == 1
+        assert reissued.last_reconciled_at is not None
+        assert reissued.run_id == "run-1"
+        assert reissued.task_id == "a"
+        assert reissued.attempt_number == 1
+        assert reissued.message.idempotency_key == "run-1:a"
+        assert reissued.message.attempt_key == "run-1:a:1"
+        assert len(attempts) == 1
+        assert attempts[0].attempt_number == 1
+        assert attempts[0].status is AttemptStatus.DISPATCHED
+
+        published = await DispatchOutboxPublisher(
+            DispatchOutboxRepository(session),
+            dispatcher,
+        ).publish_pending()
+        assert published.published_event_ids == (event_id,)
+
+    run_in_db(body)
+
+
+def test_too_new_or_discarded_published_dispatch_is_never_reconciled() -> None:
+    async def body(session):
+        definition = workflow("wf-reconcile-safety", task("a"), task("b"))
+        await persist_run(session, definition)
+        scheduler = WorkflowScheduler(
+            WorkflowRepository(session),
+            WorkflowRunRepository(session),
+            TaskAttemptRepository(session),
+            InMemoryTaskDispatcher(),
+        )
+        summary = await scheduler.dispatch_ready("run-1", max_dispatch=2)
+        outbox = DispatchOutboxRepository(session)
+        now = datetime.now(UTC)
+        await outbox.mark_published(summary.outbox_event_ids[0], now)
+        await outbox.mark_published(
+            summary.outbox_event_ids[1],
+            now - timedelta(minutes=10),
+        )
+        await outbox.mark_discarded(
+            summary.outbox_event_ids[1],
+            now,
+            "cancelled before worker claim",
+        )
+
+        result = await DispatchReconciler(
+            outbox,
+            reconcile_after_seconds=60,
+            batch_size=10,
+        ).reconcile_once(now)
+        events = {item.id: item for item in await outbox.list_unpublished()}
+
+        assert result.reconciled == 0
+        assert summary.outbox_event_ids[0] not in events
+        assert summary.outbox_event_ids[1] not in events
+
+    run_in_db(body)
+
+
+def test_running_leased_dispatch_is_never_reconciled() -> None:
+    async def body(session):
+        definition = workflow("wf-reconcile-lease", task("a"))
+        await persist_run(session, definition)
+        dispatcher = InMemoryTaskDispatcher()
+        summary = await schedule_and_publish(session, dispatcher)
+        outbox = DispatchOutboxRepository(session)
+        now = datetime.now(UTC)
+        await outbox.mark_published(
+            summary.outbox_event_ids[0], now - timedelta(minutes=10)
+        )
+        run = await WorkflowRunRepository(session).get("run-1", definition)
+        attempt = (await TaskAttemptRepository(session).list_attempts("run-1", "a"))[0]
+        run.start_dispatched_task("a")
+        claimed = await TaskAttemptRepository(session).claim_dispatched_attempt(
+            run, attempt, "worker", "lease-token", now, 60
+        )
+
+        result = await DispatchReconciler(
+            outbox, reconcile_after_seconds=60, batch_size=10
+        ).reconcile_once(now)
+        attempts = await TaskAttemptRepository(session).list_attempts("run-1", "a")
+
+        assert result.reconciled == 0
+        assert len(attempts) == 1
+        assert attempts[0].status is AttemptStatus.RUNNING
+        assert attempts[0].lease_token == claimed.lease_token
+
+    run_in_db(body)
+
+
+def test_cancelled_published_dispatch_is_never_reconciled() -> None:
+    async def body(session):
+        definition = workflow("wf-reconcile-cancel", task("a"))
+        await persist_run(session, definition)
+        summary = await schedule_and_publish(session, InMemoryTaskDispatcher())
+        outbox = DispatchOutboxRepository(session)
+        now = datetime.now(UTC)
+        await outbox.mark_published(
+            summary.outbox_event_ids[0], now - timedelta(minutes=10)
+        )
+        await WorkflowManagementService(
+            WorkflowRepository(session),
+            WorkflowRunRepository(session),
+            TaskAttemptRepository(session),
+        ).cancel_run("run-1")
+
+        result = await DispatchReconciler(
+            outbox, reconcile_after_seconds=60, batch_size=10
+        ).reconcile_once(now)
+        attempts = await TaskAttemptRepository(session).list_attempts("run-1", "a")
+
+        assert result.reconciled == 0
+        assert len(attempts) == 1
+        assert attempts[0].status is AttemptStatus.DISPATCHED
+
+    run_in_db(body)
+
+
+def test_succeeded_published_dispatch_is_never_reconciled() -> None:
+    async def body(session):
+        definition = workflow("wf-reconcile-success", task("a"))
+        await persist_run(session, definition)
+        dispatcher = InMemoryTaskDispatcher()
+        summary = await schedule_and_publish(session, dispatcher)
+        await TaskWorker(
+            WorkflowRepository(session),
+            WorkflowRunRepository(session),
+            TaskAttemptRepository(session),
+            dispatcher,
+            {"a": lambda: None},
+        ).run_once(timeout=0.1)
+        now = datetime.now(UTC)
+        outbox = DispatchOutboxRepository(session)
+        await outbox.mark_published(
+            summary.outbox_event_ids[0], now - timedelta(minutes=10)
+        )
+
+        result = await DispatchReconciler(
+            outbox, reconcile_after_seconds=60, batch_size=10
+        ).reconcile_once(now)
+        loaded = await WorkflowRunRepository(session).get("run-1", definition)
+
+        assert result.reconciled == 0
+        assert loaded.status is WorkflowStatus.SUCCEEDED
+        assert (
+            len(await TaskAttemptRepository(session).list_attempts("run-1", "a")) == 1
+        )
+
+    run_in_db(body)
+
+
+def test_interrupted_published_dispatch_is_never_reconciled() -> None:
+    async def body(session):
+        definition = workflow("wf-reconcile-interrupted", task("a"))
+        await persist_run(session, definition)
+        dispatcher = InMemoryTaskDispatcher()
+        summary = await schedule_and_publish(session, dispatcher)
+        now = datetime.now(UTC)
+        outbox = DispatchOutboxRepository(session)
+        await outbox.mark_published(
+            summary.outbox_event_ids[0], now - timedelta(minutes=10)
+        )
+        run_repo = WorkflowRunRepository(session)
+        attempt_repo = TaskAttemptRepository(session)
+        run = await run_repo.get("run-1", definition)
+        attempt = (await attempt_repo.list_attempts("run-1", "a"))[0]
+        run.start_dispatched_task("a")
+        await attempt_repo.claim_dispatched_attempt(
+            run, attempt, "worker", "lease-token", now - timedelta(minutes=5), 1
+        )
+        await LeaseReaper(
+            WorkflowRepository(session), run_repo, attempt_repo
+        ).reclaim_expired()
+
+        result = await DispatchReconciler(
+            outbox, reconcile_after_seconds=60, batch_size=10
+        ).reconcile_once(now)
+        attempts = await attempt_repo.list_attempts("run-1", "a")
+
+        assert result.reconciled == 0
+        assert len(attempts) == 1
+        assert attempts[0].status is AttemptStatus.INTERRUPTED
+
+    run_in_db(body)
+
+
+def test_concurrent_reconcilers_lock_distinct_stale_dispatches() -> None:
+    async def scenario() -> None:
+        engine = create_async_engine(TEST_DATABASE_URL)
+        await reset_schema(engine)
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        definition = workflow("wf-reconcile-race", task("a"))
+        now = datetime.now(UTC)
+        event_ids: list[str] = []
+        try:
+            async with session_factory() as setup:
+                await WorkflowRepository(setup).save(definition)
+                for index in range(3):
+                    run = WorkflowRun.create(f"run-race-{index}", definition)
+                    await WorkflowRunRepository(setup).create(run)
+                    summary = await WorkflowScheduler(
+                        WorkflowRepository(setup),
+                        WorkflowRunRepository(setup),
+                        TaskAttemptRepository(setup),
+                        InMemoryTaskDispatcher(),
+                    ).dispatch_ready(run.run_id)
+                    event_id = summary.outbox_event_ids[0]
+                    event_ids.append(event_id)
+                    await DispatchOutboxRepository(setup).mark_published(
+                        event_id,
+                        now - timedelta(minutes=10),
+                    )
+
+            async def reconcile_once() -> tuple[str, ...]:
+                async with session_factory() as session:
+                    return (
+                        await DispatchReconciler(
+                            DispatchOutboxRepository(session),
+                            reconcile_after_seconds=60,
+                            batch_size=1,
+                        ).reconcile_once(now)
+                    ).reconciled_event_ids
+
+            first, second = await asyncio.gather(reconcile_once(), reconcile_once())
+            assert set(first).isdisjoint(second)
+            assert len(first) + len(second) == 2
+
+            async with session_factory() as cleanup:
+                last = await DispatchReconciler(
+                    DispatchOutboxRepository(cleanup),
+                    reconcile_after_seconds=60,
+                    batch_size=1,
+                ).reconcile_once(now)
+                assert len(last.reconciled_event_ids) == 1
+                events = await DispatchOutboxRepository(cleanup).list_unpublished()
+                assert {event.id for event in events} == set(event_ids)
+                assert all(event.reconcile_count == 1 for event in events)
+                for index in range(3):
+                    attempts = await TaskAttemptRepository(cleanup).list_attempts(
+                        f"run-race-{index}",
+                        "a",
+                    )
+                    assert len(attempts) == 1
+        finally:
+            await engine.dispose()
+
+    asyncio.run(scenario())
 
 
 def test_outbox_claim_prevents_second_live_claim_and_expires() -> None:

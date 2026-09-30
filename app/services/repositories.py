@@ -77,6 +77,8 @@ class DispatchOutboxEvent:
     last_error: str | None
     discarded_at: datetime | None = None
     discard_reason: str | None = None
+    last_reconciled_at: datetime | None = None
+    reconcile_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -961,6 +963,64 @@ class DispatchOutboxRepository:
             )
             return tuple(result.all())
 
+    async def reconcile_stale_published(
+        self,
+        *,
+        now: datetime,
+        reconcile_after_seconds: float,
+        limit: int,
+    ) -> tuple[str, ...]:
+        """Return safely unclaimed published dispatches to the normal publisher."""
+        cutoff = now - timedelta(seconds=reconcile_after_seconds)
+        reconciled: list[str] = []
+        async with self._session.begin():
+            result = await self._session.execute(
+                select(DispatchOutboxRecord)
+                .join(
+                    TaskRunRecord,
+                    (TaskRunRecord.run_id == DispatchOutboxRecord.run_id)
+                    & (TaskRunRecord.task_id == DispatchOutboxRecord.task_id),
+                )
+                .join(
+                    TaskAttemptRecord,
+                    (TaskAttemptRecord.run_id == DispatchOutboxRecord.run_id)
+                    & (TaskAttemptRecord.task_id == DispatchOutboxRecord.task_id)
+                    & (
+                        TaskAttemptRecord.attempt_number
+                        == DispatchOutboxRecord.attempt_number
+                    ),
+                )
+                .join(
+                    WorkflowRunRecord,
+                    (WorkflowRunRecord.run_id == DispatchOutboxRecord.run_id)
+                    & (
+                        WorkflowRunRecord.workflow_id
+                        == DispatchOutboxRecord.workflow_id
+                    ),
+                )
+                .where(DispatchOutboxRecord.published_at.is_not(None))
+                .where(DispatchOutboxRecord.published_at <= cutoff)
+                .where(DispatchOutboxRecord.discarded_at.is_(None))
+                .where(TaskRunRecord.status == TaskStatus.DISPATCHED.value)
+                .where(TaskAttemptRecord.status == AttemptStatus.DISPATCHED.value)
+                .where(TaskAttemptRecord.lease_token.is_(None))
+                .where(TaskAttemptRecord.lease_expires_at.is_(None))
+                .where(WorkflowRunRecord.status == WorkflowStatus.RUNNING.value)
+                .order_by(DispatchOutboxRecord.published_at, DispatchOutboxRecord.id)
+                .limit(limit)
+                .with_for_update(skip_locked=True)
+            )
+            for record in result.scalars():
+                record.published_at = None
+                record.claimed_by = None
+                record.claim_token = None
+                record.claimed_at = None
+                record.claim_expires_at = None
+                record.last_reconciled_at = now
+                record.reconcile_count += 1
+                reconciled.append(record.id)
+        return tuple(reconciled)
+
     def _event_from_record(
         self,
         record: DispatchOutboxRecord,
@@ -1014,6 +1074,8 @@ class DispatchOutboxRepository:
             claim_expires_at=record.claim_expires_at,
             discarded_at=record.discarded_at,
             discard_reason=record.discard_reason,
+            last_reconciled_at=record.last_reconciled_at,
+            reconcile_count=record.reconcile_count,
             publish_attempts=record.publish_attempts,
             last_error=record.last_error,
         )

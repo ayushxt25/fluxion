@@ -6,7 +6,12 @@ from app.core.config import get_settings
 from app.engine.exceptions import DispatchError, PersistenceError, WorkerLeaseError
 from app.observability.metrics import record_scheduler_tick_dispatches
 from app.services.leases import LeaseReaper, LeaseReclaimResult
-from app.services.outbox import DispatchOutboxPublisher, OutboxPublishResult
+from app.services.outbox import (
+    DispatchOutboxPublisher,
+    DispatchReconciler,
+    DispatchReconcileResult,
+    OutboxPublishResult,
+)
 from app.services.repositories import WorkflowRunRepository
 from app.services.scheduler import DispatchSummary, WorkflowScheduler
 
@@ -123,6 +128,36 @@ class DispatchOutboxPublisherLoop:
                 await _sleep_or_stop(stop_event, self._poll_seconds)
         finally:
             logger.info("Outbox publisher loop stopped.")
+
+
+class DispatchReconcilerLoop:
+    def __init__(
+        self,
+        reconciler: DispatchReconciler,
+        *,
+        poll_seconds: float | None = None,
+    ) -> None:
+        settings = get_settings()
+        self._reconciler = reconciler
+        self._poll_seconds = (
+            poll_seconds or settings.dispatch_reconcile_poll_interval_seconds
+        )
+
+    async def tick(self) -> DispatchReconcileResult:
+        try:
+            return await self._reconciler.reconcile_once()
+        except PersistenceError:
+            logger.exception("Dispatch reconciliation tick failed.")
+            return DispatchReconcileResult(0, 0, ())
+
+    async def run(self, stop_event: asyncio.Event) -> None:
+        logger.info("Dispatch reconciler loop started.")
+        try:
+            while not stop_event.is_set():
+                await self.tick()
+                await _sleep_or_stop(stop_event, self._poll_seconds)
+        finally:
+            logger.info("Dispatch reconciler loop stopped.")
 
 
 class LeaseReaperLoop:

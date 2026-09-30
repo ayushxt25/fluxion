@@ -197,12 +197,29 @@ class DispatchOutboxRecord(Base):
         server_default="0",
     )
     last_error: Mapped[str | None] = mapped_column(Text)
+    last_reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reconcile_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
 
 
 Index(
     "ix_task_runs_status_next_retry_at",
     TaskRunRecord.status,
     TaskRunRecord.next_retry_at,
+)
+
+Index(
+    "ix_dispatch_outbox_reconcile_published",
+    DispatchOutboxRecord.published_at,
+    DispatchOutboxRecord.id,
+    postgresql_where=(
+        DispatchOutboxRecord.published_at.is_not(None)
+        & DispatchOutboxRecord.discarded_at.is_(None)
+    ),
 )
 
 Index(

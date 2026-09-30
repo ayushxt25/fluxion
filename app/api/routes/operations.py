@@ -16,6 +16,7 @@ from app.dispatch.transport import RedisTaskDispatcher
 from app.schemas.api import (
     AuditEventListResponse,
     AuditEventResponse,
+    DispatchReconcileResponse,
     LeaseReapResponse,
     OutboxPublishResponse,
     RetentionRunRequest,
@@ -26,7 +27,7 @@ from app.security.models import Principal, Role
 from app.services.audit import AuditEventRepository, AuditService
 from app.services.leases import LeaseReaper
 from app.services.loops import LeaseReaperLoop, SchedulerLoop
-from app.services.outbox import DispatchOutboxPublisher
+from app.services.outbox import DispatchOutboxPublisher, DispatchReconciler
 from app.services.repositories import (
     DispatchOutboxRepository,
     TaskAttemptRepository,
@@ -181,6 +182,38 @@ async def outbox_publish(
         action="ops.outbox.publish",
     )
     return response
+
+
+@router.post(
+    "/dispatch/reconcile",
+    response_model=DispatchReconcileResponse,
+    dependencies=[
+        Depends(require_role(Role.ADMIN)),
+        Depends(require_rate_limit(ops=True)),
+    ],
+)
+async def reconcile_dispatches(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[Principal, Depends(get_current_principal)],
+) -> DispatchReconcileResponse:
+    settings = get_settings()
+    result = await DispatchReconciler(
+        DispatchOutboxRepository(session),
+        reconcile_after_seconds=settings.dispatch_reconcile_after_seconds,
+        batch_size=settings.dispatch_reconcile_batch_size,
+    ).reconcile_once()
+    await AuditService(AuditEventRepository(session)).record_success(
+        request_id=getattr(request.state, "request_id", ""),
+        principal=principal,
+        action="ops.dispatch.reconcile",
+        metadata={"reconciled": result.reconciled},
+    )
+    return DispatchReconcileResponse(
+        considered=result.considered,
+        reconciled=result.reconciled,
+        reconciled_event_ids=result.reconciled_event_ids,
+    )
 
 
 @router.post(

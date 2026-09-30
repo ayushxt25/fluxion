@@ -16,6 +16,7 @@ from app.sdk.http import (
 )
 from app.sdk.models import (
     AuditEventList,
+    DispatchReconcileResult,
     EventIngestResult,
     EventSubscription,
     EventSubscriptionList,
@@ -61,6 +62,13 @@ class OperationsClient:
     def publish_outbox(self) -> OutboxPublishResult:
         return self._client._model(
             "POST", "/api/v1/ops/outbox/publish", OutboxPublishResult
+        )
+
+    def reconcile_dispatches(self) -> DispatchReconcileResult:
+        return self._model(
+            "POST",
+            "/api/v1/ops/dispatch/reconcile",
+            DispatchReconcileResult,
         )
 
     def reap_leases(self) -> LeaseReapResult:

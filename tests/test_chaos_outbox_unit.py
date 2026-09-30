@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.dispatch.messages import TaskDispatchMessage
-from app.services.outbox import DispatchOutboxPublisher
+from app.services.outbox import DispatchOutboxPublisher, DispatchReconciler
 from app.services.repositories import DispatchOutboxEvent
 from tests.support.faults import InjectedFault
 
@@ -87,5 +87,57 @@ def test_publisher_crash_window_allows_duplicate_transport_on_retry() -> None:
         assert dispatcher.messages == [_message(), _message()]
         assert result.published == 1
         assert repository.event.published_at is not None
+
+    asyncio.run(scenario())
+
+
+def test_reconciler_failure_before_commit_leaves_dispatch_published() -> None:
+    class Repository:
+        def __init__(self) -> None:
+            self.published = True
+            self.reconcile_count = 0
+            self.fail = True
+
+        async def reconcile_stale_published(self, **kwargs):
+            if self.fail:
+                raise InjectedFault("before.dispatch_reconciliation.commit")
+            self.published = False
+            self.reconcile_count += 1
+            return ("event-1",)
+
+    async def scenario() -> None:
+        repository = Repository()
+        reconciler = DispatchReconciler(
+            repository,  # type: ignore[arg-type]
+            reconcile_after_seconds=60,
+            batch_size=1,
+        )
+        with pytest.raises(
+            InjectedFault, match="before.dispatch_reconciliation.commit"
+        ):
+            await reconciler.reconcile_once()
+        assert repository.published is True
+        assert repository.reconcile_count == 0
+
+        repository.fail = False
+        assert (await reconciler.reconcile_once()).reconciled_event_ids == ("event-1",)
+        assert repository.published is False
+        assert repository.reconcile_count == 1
+
+    asyncio.run(scenario())
+
+
+def test_reconciled_dispatch_survives_process_loss_before_publisher() -> None:
+    class Repository:
+        async def reconcile_stale_published(self, **kwargs):
+            return ("event-1",)
+
+    async def scenario() -> None:
+        result = await DispatchReconciler(
+            Repository(),  # type: ignore[arg-type]
+            reconcile_after_seconds=60,
+            batch_size=1,
+        ).reconcile_once()
+        assert result.reconciled_event_ids == ("event-1",)
 
     asyncio.run(scenario())

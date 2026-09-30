@@ -174,6 +174,12 @@ class OutboxPublishResponse(BaseModel):
     discarded_event_ids: tuple[str, ...] = Field(default_factory=tuple)
 
 
+class DispatchReconcileResponse(BaseModel):
+    considered: int
+    reconciled: int
+    reconciled_event_ids: tuple[str, ...]
+
+
 class LeaseReapResponse(BaseModel):
     reclaimed: int
     run_ids: tuple[str, ...]

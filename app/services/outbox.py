@@ -6,7 +6,11 @@ from uuid import uuid4
 
 from app.dispatch.transport import TaskDispatcher
 from app.engine.exceptions import DispatchError
-from app.observability.metrics import record_outbox_publish
+from app.observability.metrics import (
+    record_dispatch_reconciled,
+    record_dispatch_reconciliation,
+    record_outbox_publish,
+)
 from app.services.repositories import DispatchOutboxRepository
 
 logger = logging.getLogger(__name__)
@@ -26,6 +30,13 @@ class OutboxPublishResult:
 class DispatchReconciliationResult:
     dispatched_attempts_missing_outbox: tuple[tuple[str, str, int], ...]
     unpublished_outbox_event_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class DispatchReconcileResult:
+    considered: int
+    reconciled: int
+    reconciled_event_ids: tuple[str, ...]
 
 
 class DispatchOutboxPublisher:
@@ -169,4 +180,40 @@ class DispatchReconciliationService:
         return DispatchReconciliationResult(
             dispatched_attempts_missing_outbox=missing,
             unpublished_outbox_event_ids=tuple(event.id for event in unpublished),
+        )
+
+
+class DispatchReconciler:
+    """Repairs stale published transport intent without creating another attempt."""
+
+    def __init__(
+        self,
+        outbox_repository: DispatchOutboxRepository,
+        *,
+        reconcile_after_seconds: float,
+        batch_size: int,
+    ) -> None:
+        if reconcile_after_seconds <= 0 or batch_size <= 0:
+            raise ValueError("Reconciliation settings must be positive.")
+        self._outbox_repository = outbox_repository
+        self._reconcile_after_seconds = reconcile_after_seconds
+        self._batch_size = batch_size
+
+    async def reconcile_once(
+        self,
+        now: datetime | None = None,
+    ) -> DispatchReconcileResult:
+        event_ids = await self._outbox_repository.reconcile_stale_published(
+            now=now or datetime.now(UTC),
+            reconcile_after_seconds=self._reconcile_after_seconds,
+            limit=self._batch_size,
+        )
+        record_dispatch_reconciliation(outcome="reconciled", count=len(event_ids))
+        record_dispatch_reconciled(len(event_ids))
+        if event_ids:
+            logger.info("Reconciled %s stale dispatches.", len(event_ids))
+        return DispatchReconcileResult(
+            considered=len(event_ids),
+            reconciled=len(event_ids),
+            reconciled_event_ids=event_ids,
         )

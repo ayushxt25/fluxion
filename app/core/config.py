@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     outbox_poll_seconds: float = 1.0
     outbox_batch_size: int = 100
     outbox_claim_seconds: float = 30
+    dispatch_reconcile_after_seconds: float = 120
+    dispatch_reconcile_batch_size: int = 100
+    dispatch_reconcile_poll_interval_seconds: float = 10
     lease_reaper_interval_seconds: float = 5
     auth_enabled: bool = True
     jwt_secret: str | None = None
@@ -117,6 +120,14 @@ class Settings(BaseSettings):
             raise ValueError("OUTBOX_BATCH_SIZE must be positive.")
         if self.outbox_claim_seconds <= 0:
             raise ValueError("OUTBOX_CLAIM_SECONDS must be positive.")
+        if self.dispatch_reconcile_after_seconds <= 0:
+            raise ValueError("DISPATCH_RECONCILE_AFTER_SECONDS must be positive.")
+        if self.dispatch_reconcile_batch_size < 1:
+            raise ValueError("DISPATCH_RECONCILE_BATCH_SIZE must be at least 1.")
+        if self.dispatch_reconcile_poll_interval_seconds <= 0:
+            raise ValueError(
+                "DISPATCH_RECONCILE_POLL_INTERVAL_SECONDS must be positive."
+            )
         if self.lease_reaper_interval_seconds <= 0:
             raise ValueError("LEASE_REAPER_INTERVAL_SECONDS must be positive.")
         if self.schedule_runner_poll_seconds <= 0:

@@ -19,6 +19,7 @@ def test_console_scripts_are_registered() -> None:
         "fluxion-api": "app.runtime.api:main",
         "fluxion-scheduler": "app.runtime.scheduler:main",
         "fluxion-publisher": "app.runtime.publisher:main",
+        "fluxion-reconciler": "app.runtime.reconciler:main",
         "fluxion-reaper": "app.runtime.reaper:main",
         "fluxion-worker": "app.runtime.worker:main",
         "fluxion-webhook": "app.runtime.webhooks:main",
@@ -84,6 +85,7 @@ def test_docker_compose_defines_required_services_and_migration() -> None:
         "api:",
         "scheduler:",
         "publisher:",
+        "reconciler:",
         "reaper:",
         "worker:",
     ):
@@ -95,6 +97,7 @@ def test_docker_compose_defines_required_services_and_migration() -> None:
     assert "FLUSHDB" not in compose
     assert "FLUSHALL" not in compose
     assert "retention:" in compose
+    assert 'command: ["fluxion-reconciler"]' in compose
     assert 'profiles: ["maintenance"]' in compose
 
 

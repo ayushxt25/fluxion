@@ -15,6 +15,12 @@ class Health(SDKModel):
     service: str
 
 
+class DispatchReconcileResult(SDKModel):
+    considered: int
+    reconciled: int
+    reconciled_event_ids: tuple[str, ...]
+
+
 class Readiness(SDKModel):
     status: str
     checks: dict[str, str]

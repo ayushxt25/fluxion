@@ -103,6 +103,15 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  reconciler:
+    image: fluxion:local
+    build: .
+    command: ["fluxion-reconciler"]
+    environment: *app-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   reaper:
     image: fluxion:local
     build: .

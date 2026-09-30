@@ -289,6 +289,19 @@ def record_event_filter_result(matched: bool) -> None:
     )
 
 
+def record_dispatch_reconciliation(*, outcome: str, count: int = 1) -> None:
+    registry.inc_counter(
+        "fluxion_dispatch_reconciliations_total",
+        {"outcome": outcome},
+        amount=count,
+    )
+
+
+def record_dispatch_reconciled(count: int) -> None:
+    if count:
+        registry.inc_counter("fluxion_dispatch_reconciled_total", amount=count)
+
+
 def _labels(labels: dict[str, str] | None) -> tuple[tuple[str, str], ...]:
     return tuple(sorted((labels or {}).items()))
 

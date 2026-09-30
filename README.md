@@ -541,9 +541,12 @@ crash. The idempotency key is an identity primitive only; tasks are responsible
 for using it with external systems. Concurrent multi-process resume is not
 supported; Fluxion does not yet provide distributed run ownership or resume
 coordination. The outbox provides at-least-once publication intent, not
-exactly-once delivery or exactly-once execution. Redis message loss after an
-outbox row is marked published is not automatically detected, and concurrent
-outbox publisher claims do not remove the publish/crash duplicate window.
+exactly-once delivery or exactly-once execution. The dispatch reconciler can
+make a stale published dispatch publishable again when PostgreSQL still shows
+the attempt as unclaimed and `DISPATCHED`; it preserves the same attempt and
+dispatch identity. Redis duplicates remain possible. It does not retry work
+that obtained worker ownership or became interrupted, because external side
+effects may be ambiguous.
 Duplicate Redis delivery may occur, and workers reject messages that do not
 match durable PostgreSQL state. Expired leases are treated conservatively: the
 attempt and task become `INTERRUPTED` and the workflow becomes `FAILED`;

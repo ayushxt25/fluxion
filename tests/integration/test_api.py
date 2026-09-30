@@ -17,7 +17,7 @@ if not test_database_name.endswith("_test"):
     )
 
 # ruff: noqa: E402
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -236,8 +236,7 @@ async def test_workflow_create_publish_and_revision_reads() -> None:
         assert first_revision.json()["revision"] == 1
         assert old_run.json()["workflow_revision"] == 1
         assert all(
-            item["workflow_revision"] == 1
-            for item in old_events.json()["items"]
+            item["workflow_revision"] == 1 for item in old_events.json()["items"]
         )
         assert latest_run.json()["workflow_revision"] == 2
         assert pinned_run.json()["workflow_revision"] == 1
@@ -260,9 +259,7 @@ async def test_workflow_revision_provenance_and_diff_api() -> None:
         )
         changed_payload = workflow_payload("wf-diff")
         changed_payload["name"] = "API Workflow v2"
-        changed_payload["tasks"].append(
-            {"id": "c", "name": "C", "depends_on": ["b"]}
-        )
+        changed_payload["tasks"].append({"id": "c", "name": "C", "depends_on": ["b"]})
         second = await client.post(
             "/api/v1/workflows",
             json=changed_payload,
@@ -411,7 +408,8 @@ async def test_schedule_api_lifecycle_rbac_validation_and_audit() -> None:
             item for item in audit_items if item["action"] == "schedule.create"
         )
         assert schedule_audit["metadata"] == {
-            "workflow_id": "wf-schedule-api", "workflow_revision": None
+            "workflow_id": "wf-schedule-api",
+            "workflow_revision": None,
         }
 
 
@@ -652,6 +650,82 @@ async def test_authentication_and_rbac_policy() -> None:
         assert operator_ops.status_code == 403
         assert admin_ops.status_code == 200
         assert "error" in viewer_create.json()
+
+
+async def test_dispatch_reconcile_ops_rbac_response_and_audit() -> None:
+    async def seed(session_factory) -> str:
+        async with session_factory() as session:
+            definition = WorkflowDefinition(
+                id="wf-reconcile-api",
+                name="Reconcile API",
+                tasks=(TaskDefinition(id="a"),),
+            )
+            await WorkflowRepository(session).save(definition)
+            run = WorkflowRun.create("run-reconcile-api", definition)
+            await WorkflowRunRepository(session).create(run)
+            summary = await WorkflowScheduler(
+                WorkflowRepository(session),
+                WorkflowRunRepository(session),
+                TaskAttemptRepository(session),
+                outbox_repository=DispatchOutboxRepository(session),
+            ).dispatch_ready(run.run_id)
+            event_id = summary.outbox_event_ids[0]
+            await DispatchOutboxRepository(session).mark_published(
+                event_id,
+                datetime.now(UTC) - timedelta(minutes=10),
+            )
+            return event_id
+
+    async with api_client() as (client, session_factory):
+        event_id = await seed(session_factory)
+        viewer = await client.post(
+            "/api/v1/ops/dispatch/reconcile",
+            headers=auth_headers(Role.VIEWER),
+        )
+        operator = await client.post(
+            "/api/v1/ops/dispatch/reconcile",
+            headers=auth_headers(Role.OPERATOR),
+        )
+        admin = await client.post(
+            "/api/v1/ops/dispatch/reconcile",
+            headers={
+                **auth_headers(Role.ADMIN),
+                "X-Request-ID": "request-dispatch-reconcile",
+            },
+        )
+        audit = await client.get(
+            "/api/v1/ops/audit?action=ops.dispatch.reconcile",
+            headers=auth_headers(Role.ADMIN),
+        )
+
+        assert viewer.status_code == 403
+        assert operator.status_code == 403
+        assert admin.status_code == 200
+        assert admin.json() == {
+            "considered": 1,
+            "reconciled": 1,
+            "reconciled_event_ids": [event_id],
+        }
+        assert audit.status_code == 200
+        item = audit.json()["items"][0]
+        assert item["action"] == "ops.dispatch.reconcile"
+        assert item["principal_subject"] == "admin-user"
+        assert item["principal_role"] == "admin"
+        assert item["outcome"] == "success"
+        assert item["metadata"] == {"reconciled": 1}
+        assert "test-secret" not in audit.text
+        assert "lease_token" not in audit.text
+
+
+async def test_dispatch_reconcile_failure_does_not_audit_success() -> None:
+    async with api_client(postgres_ready=False) as (client, _):
+        response = await client.post(
+            "/api/v1/ops/dispatch/reconcile",
+            headers=auth_headers(Role.ADMIN),
+        )
+
+        assert response.status_code == 503
+        assert "ops.dispatch.reconcile" not in response.text
 
 
 async def test_auth_disabled_mode_uses_internal_admin() -> None:
