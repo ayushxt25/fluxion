@@ -20,12 +20,14 @@ if not test_database_name.endswith("_test"):
 from datetime import UTC, datetime, timedelta
 
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api.dependencies import get_db_session
 from app.core.config import get_settings
 from app.db import models  # noqa: F401
 from app.db.base import Base
+from app.db.models.audit import AuditEventRecord
 from app.dispatch.transport import InMemoryTaskDispatcher
 from app.engine.execution import WorkflowRun
 from app.engine.status import AttemptStatus
@@ -98,6 +100,7 @@ async def api_client(
     rate_limiter: FakeRateLimiter | None = None,
     dispatcher: InMemoryTaskDispatcher | None = None,
     postgres_ready: bool = True,
+    raise_app_exceptions: bool = True,
 ) -> AsyncIterator[tuple[AsyncClient, async_sessionmaker]]:
     env_keys = (
         "AUTH_ENABLED",
@@ -136,7 +139,7 @@ async def api_client(
     app.state.redis_dispatcher = dispatcher or InMemoryTaskDispatcher()
     app.state.rate_limiter = rate_limiter or FakeRateLimiter()
     try:
-        transport = ASGITransport(app=app)
+        transport = ASGITransport(app=app, raise_app_exceptions=raise_app_exceptions)
         async with AsyncClient(
             transport=transport,
             base_url="http://testserver",
@@ -727,14 +730,26 @@ async def test_dispatch_reconcile_ops_rbac_response_and_audit() -> None:
 
 
 async def test_dispatch_reconcile_failure_does_not_audit_success() -> None:
-    async with api_client(postgres_ready=False) as (client, _):
+    async with api_client(
+        postgres_ready=False,
+        raise_app_exceptions=False,
+    ) as (client, session_factory):
         response = await client.post(
             "/api/v1/ops/dispatch/reconcile",
             headers=auth_headers(Role.ADMIN),
         )
 
-        assert response.status_code == 503
+        assert response.status_code == 500
         assert "ops.dispatch.reconcile" not in response.text
+        assert "postgresql://user:password@localhost/db" not in response.text
+        async with session_factory() as session:
+            success_actions = await session.execute(
+                select(AuditEventRecord.action).where(
+                    AuditEventRecord.action == "ops.dispatch.reconcile",
+                    AuditEventRecord.outcome == "SUCCESS",
+                )
+            )
+            assert tuple(success_actions.scalars()) == ()
 
 
 async def test_auth_disabled_mode_uses_internal_admin() -> None:
