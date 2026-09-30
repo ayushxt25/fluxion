@@ -66,7 +66,7 @@ class AsyncOperationsClient:
         )
 
     async def reconcile_dispatches(self) -> DispatchReconcileResult:
-        return await self._model(
+        return await self._client._model(
             "POST",
             "/api/v1/ops/dispatch/reconcile",
             DispatchReconcileResult,
@@ -134,6 +134,9 @@ class AsyncFluxionClient:
 
     async def readiness(self) -> Readiness:
         return await self._model("GET", "/ready", Readiness)
+
+    async def reconcile_dispatches(self) -> DispatchReconcileResult:
+        return await self.ops.reconcile_dispatches()
 
     async def create_workflow(self, workflow: Workflow) -> Workflow:
         return await self._model(

@@ -72,6 +72,15 @@ class FailingDispatcher(InMemoryTaskDispatcher):
 
 
 class FailingSession:
+    def begin(self):
+        return self
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        return None
+
     async def execute(self, statement):
         raise RuntimeError("postgresql://user:password@localhost/db")
 
@@ -711,7 +720,7 @@ async def test_dispatch_reconcile_ops_rbac_response_and_audit() -> None:
         assert item["action"] == "ops.dispatch.reconcile"
         assert item["principal_subject"] == "admin-user"
         assert item["principal_role"] == "admin"
-        assert item["outcome"] == "success"
+        assert item["outcome"] == "SUCCESS"
         assert item["metadata"] == {"reconciled": 1}
         assert "test-secret" not in audit.text
         assert "lease_token" not in audit.text

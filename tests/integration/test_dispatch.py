@@ -35,7 +35,7 @@ from app.engine.execution import WorkflowRun
 from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
 from app.schemas.workflow import RetryPolicy, TaskDefinition, WorkflowDefinition
 from app.services.leases import LeaseReaper
-from app.services.management import WorkflowManagementService
+from app.services.management import WorkflowRunManagementService
 from app.services.outbox import (
     DispatchOutboxPublisher,
     DispatchReconciler,
@@ -303,7 +303,7 @@ def test_cancelled_published_dispatch_is_never_reconciled() -> None:
         await outbox.mark_published(
             summary.outbox_event_ids[0], now - timedelta(minutes=10)
         )
-        await WorkflowManagementService(
+        await WorkflowRunManagementService(
             WorkflowRepository(session),
             WorkflowRunRepository(session),
             TaskAttemptRepository(session),

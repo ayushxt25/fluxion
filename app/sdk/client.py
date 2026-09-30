@@ -65,7 +65,7 @@ class OperationsClient:
         )
 
     def reconcile_dispatches(self) -> DispatchReconcileResult:
-        return self._model(
+        return self._client._model(
             "POST",
             "/api/v1/ops/dispatch/reconcile",
             DispatchReconcileResult,
@@ -131,6 +131,9 @@ class FluxionClient:
 
     def readiness(self) -> Readiness:
         return self._model("GET", "/ready", Readiness)
+
+    def reconcile_dispatches(self) -> DispatchReconcileResult:
+        return self.ops.reconcile_dispatches()
 
     def create_workflow(self, workflow: Workflow) -> Workflow:
         return self._model(
