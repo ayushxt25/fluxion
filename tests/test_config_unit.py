@@ -11,6 +11,10 @@ def test_worker_lease_configuration_accepts_valid_values() -> None:
     assert settings.worker_heartbeat_seconds == 10
 
 
+def test_debug_defaults_to_disabled() -> None:
+    assert Settings().debug is False
+
+
 def test_worker_lease_configuration_rejects_invalid_values() -> None:
     with pytest.raises(ValidationError):
         Settings(worker_lease_seconds=0)

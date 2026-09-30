@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "Fluxion"
     app_env: str = "development"
-    debug: bool = True
+    debug: bool = False
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     database_url: str = "postgresql+asyncpg://fluxion:fluxion@localhost:5432/fluxion"
