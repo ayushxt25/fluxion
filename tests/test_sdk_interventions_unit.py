@@ -19,7 +19,7 @@ def _item(resolution: str = "PENDING") -> dict:
         "resolver_subject": None,
         "resolver_role": None,
         "reason": None,
-        "resulting_retry_attempt_number": None,
+        "resulting_attempt_number": None,
     }
 
 

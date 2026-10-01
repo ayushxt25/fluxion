@@ -36,10 +36,9 @@ def upgrade() -> None:
         ),
         sa.Column("resolved_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(
-            ["run_id", "workflow_id", "task_id", "interrupted_attempt_number"],
+            ["run_id", "task_id", "interrupted_attempt_number"],
             [
                 "task_attempts.run_id",
-                "task_attempts.workflow_id",
                 "task_attempts.task_id",
                 "task_attempts.attempt_number",
             ],
