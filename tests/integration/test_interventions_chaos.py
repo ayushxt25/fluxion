@@ -223,7 +223,8 @@ def test_committed_retry_survives_process_loss_before_publisher() -> None:
                 )
                 assert result.attempted == 2
                 assert result.published == 1
-                assert result.discarded == 1
+                assert result.failed == 0
+                assert len(result.discarded_event_ids) == 1
                 assert len(attempts) == 2
                 assert outbox[0].discarded_at is not None
                 assert outbox[1].published_at is not None

@@ -170,9 +170,9 @@ def test_intervention_retry_creates_one_new_attempt_and_outbox() -> None:
         outbox = (
             (
                 await session.execute(
-                    select(DispatchOutboxRecord).where(
-                        DispatchOutboxRecord.run_id == run_id
-                    )
+                    select(DispatchOutboxRecord)
+                    .where(DispatchOutboxRecord.run_id == run_id)
+                    .order_by(DispatchOutboxRecord.attempt_number)
                 )
             )
             .scalars()
@@ -185,9 +185,13 @@ def test_intervention_retry_creates_one_new_attempt_and_outbox() -> None:
             AttemptStatus.INTERRUPTED.value,
             AttemptStatus.DISPATCHED.value,
         ]
-        assert attempts[0].attempt_key != attempts[1].attempt_key
         assert len(outbox) == 2
-        assert outbox[-1].attempt_number == 2
+        assert [event.attempt_number for event in outbox] == [1, 2]
+        assert outbox[0].payload["attempt_key"] != outbox[1].payload["attempt_key"]
+        assert outbox[1].payload["attempt_key"] == f"{run_id}:task:2"
+        assert (
+            outbox[0].payload["idempotency_key"] == outbox[1].payload["idempotency_key"]
+        )
         assert (
             'fluxion_task_intervention_resolutions_total{action="retry",'
             'outcome="success"} 1'
@@ -596,7 +600,7 @@ async def test_stale_intervention_retry_api_conflicts_without_audit_success() ->
         assert "postgresql://" not in response.text
 
 
-def test_intervention_transition_logs_are_sanitized(caplog) -> None:
+def test_intervention_transition_logs_are_sanitized() -> None:
     async def body(session) -> None:
         _, retry_run = await _interrupted(session, run_id="retry-log")
         retry_id = (
@@ -636,25 +640,38 @@ def test_intervention_transition_logs_are_sanitized(caplog) -> None:
             role="ADMIN",
         )
 
+    class RecordHandler(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.records: list[logging.LogRecord] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            self.records.append(record)
+
+    handler = RecordHandler()
     loggers = (
         logging.getLogger("app.services.repositories"),
         logging.getLogger("app.services.interventions"),
     )
+    original_levels = tuple(logger.level for logger in loggers)
     for logger in loggers:
         logger.setLevel(logging.INFO)
-        logger.addHandler(caplog.handler)
+        logger.addHandler(handler)
     try:
         _in_db(body)
     finally:
-        for logger in loggers:
-            logger.removeHandler(caplog.handler)
-    events = {getattr(record, "event", None) for record in caplog.records}
+        for logger, level in zip(loggers, original_levels, strict=True):
+            logger.removeHandler(handler)
+            logger.setLevel(level)
+    events = {getattr(record, "event", None) for record in handler.records}
     assert {
         "task.intervention.required",
         "task.intervention.retry",
         "task.intervention.fail",
         "task.intervention.conflict",
     }.issubset(events)
-    rendered = caplog.text
+    rendered = "\n".join(
+        f"{record.getMessage()} {record.__dict__}" for record in handler.records
+    )
     assert "worker-lease-token" not in rendered
     assert "postgresql://" not in rendered
