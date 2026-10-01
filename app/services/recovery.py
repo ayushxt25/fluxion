@@ -76,6 +76,9 @@ class WorkflowRecoveryService:
         run_id: str,
         workflow_id: str,
         workflow_revision: int = 1,
+        *,
+        coordinator_id: str | None = None,
+        coordinator_lease_token: str | None = None,
     ) -> WorkflowRecoveryResult:
         workflow = await self._workflow_repository.get_revision(
             workflow_id, workflow_revision
@@ -88,6 +91,15 @@ class WorkflowRecoveryService:
         if self._attempt_repository is not None:
             leased_running_task_ids = await self._validate_attempts(workflow_run)
         workflow_run.reconcile_readiness_for_recovery(now)
+
+        fencing = (
+            {
+                "coordinator_id": coordinator_id,
+                "coordinator_lease_token": coordinator_lease_token,
+            }
+            if coordinator_id is not None or coordinator_lease_token is not None
+            else {}
+        )
         interrupted_task_ids = workflow_run.interrupt_running_tasks_for_recovery(
             leased_running_task_ids
         )
@@ -98,9 +110,13 @@ class WorkflowRecoveryService:
                 workflow_run,
                 now,
                 interrupted_task_ids,
+                **fencing,
             )
         else:
-            await self._run_repository.save_state(workflow_run)
+            await self._run_repository.save_state(
+                workflow_run,
+                **fencing,
+            )
 
         task_statuses = {
             task_id: task_run.status

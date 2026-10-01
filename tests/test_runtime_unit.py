@@ -3,9 +3,10 @@ import tomllib
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from app import cli
 from app.core.config import Settings
 from app.engine.registry import TaskRegistry
-from app.runtime import bootstrap, retention
+from app.runtime import bootstrap, coordinator, retention
 from app.tasks.registry import build_task_registry
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +21,7 @@ def test_console_scripts_are_registered() -> None:
         "fluxion-scheduler": "app.runtime.scheduler:main",
         "fluxion-publisher": "app.runtime.publisher:main",
         "fluxion-reconciler": "app.runtime.reconciler:main",
+        "fluxion-coordinator": "app.runtime.coordinator:main",
         "fluxion-reaper": "app.runtime.reaper:main",
         "fluxion-worker": "app.runtime.worker:main",
         "fluxion-webhook": "app.runtime.webhooks:main",
@@ -28,6 +30,16 @@ def test_console_scripts_are_registered() -> None:
         "fluxion-schedule-runner": "app.runtime.schedule_runner:main",
         "fluxion-demo": "app.runtime.demo:cli",
     }
+
+
+def test_grouped_cli_registers_coordinator(monkeypatch) -> None:
+    called: list[bool] = []
+    monkeypatch.setattr("sys.argv", ["fluxion", "coordinator"])
+    monkeypatch.setattr(coordinator, "main", lambda: called.append(True))
+
+    cli.main()
+
+    assert called == [True]
 
 
 def test_task_registry_hook_builds_registry_once_per_call() -> None:
@@ -86,6 +98,7 @@ def test_docker_compose_defines_required_services_and_migration() -> None:
         "scheduler:",
         "publisher:",
         "reconciler:",
+        "coordinator:",
         "reaper:",
         "worker:",
     ):
@@ -98,6 +111,7 @@ def test_docker_compose_defines_required_services_and_migration() -> None:
     assert "FLUSHALL" not in compose
     assert "retention:" in compose
     assert 'command: ["fluxion-reconciler"]' in compose
+    assert 'command: ["fluxion-coordinator"]' in compose
     assert 'profiles: ["maintenance"]' in compose
 
 

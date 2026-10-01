@@ -24,6 +24,7 @@ from app.db.models.workflow import (
 from app.dispatch.messages import TaskDispatchMessage
 from app.engine.dag import WorkflowDAG
 from app.engine.exceptions import (
+    CoordinatorLeaseLostError,
     InvalidOutboxPayloadError,
     LeaseClaimError,
     LeaseLostError,
@@ -676,16 +677,46 @@ class WorkflowRunRepository:
                 for record in result.scalars()
             )
 
-    async def save_state(self, workflow_run: WorkflowRun) -> None:
+    async def save_state(
+        self,
+        workflow_run: WorkflowRun,
+        *,
+        coordinator_id: str | None = None,
+        coordinator_lease_token: str | None = None,
+    ) -> None:
+        if (coordinator_id is None) != (coordinator_lease_token is None):
+            raise ValueError(
+                "Coordinator identity and token must be supplied together."
+            )
         async with self._session.begin():
-            result = await self._session.execute(
+            query = (
                 select(WorkflowRunRecord)
                 .where(WorkflowRunRecord.run_id == workflow_run.run_id)
                 .where(WorkflowRunRecord.workflow_id == workflow_run.workflow_id)
+                .where(
+                    WorkflowRunRecord.coordinator_id == coordinator_id
+                    if coordinator_id is not None
+                    else True
+                )
+                .where(
+                    WorkflowRunRecord.coordinator_lease_token == coordinator_lease_token
+                    if coordinator_lease_token is not None
+                    else True
+                )
+                .where(
+                    WorkflowRunRecord.coordinator_lease_expires_at > datetime.now(UTC)
+                    if coordinator_id is not None
+                    else True
+                )
                 .options(selectinload(WorkflowRunRecord.task_runs))
             )
+            if coordinator_id is not None:
+                query = query.with_for_update()
+            result = await self._session.execute(query)
             record = result.scalar_one_or_none()
             if record is None:
+                if coordinator_id is not None:
+                    raise CoordinatorLeaseLostError(workflow_run.run_id)
                 raise WorkflowRunNotFoundError(workflow_run.run_id)
 
             _record_state_events(self._session, record, record.task_runs, workflow_run)
@@ -1596,9 +1627,16 @@ class TaskAttemptRepository:
         workflow_run: WorkflowRun,
         finished_at: datetime,
         task_ids: tuple[str, ...] | None = None,
+        *,
+        coordinator_id: str | None = None,
+        coordinator_lease_token: str | None = None,
     ) -> None:
         async with self._session.begin():
-            await self._save_workflow_state(workflow_run)
+            await self._save_workflow_state(
+                workflow_run,
+                coordinator_id=coordinator_id,
+                coordinator_lease_token=coordinator_lease_token,
+            )
             query = (
                 select(TaskAttemptRecord)
                 .where(TaskAttemptRecord.run_id == workflow_run.run_id)
@@ -1611,15 +1649,44 @@ class TaskAttemptRepository:
                 record.status = AttemptStatus.INTERRUPTED.value
                 record.finished_at = finished_at
 
-    async def _save_workflow_state(self, workflow_run: WorkflowRun) -> None:
-        result = await self._session.execute(
+    async def _save_workflow_state(
+        self,
+        workflow_run: WorkflowRun,
+        *,
+        coordinator_id: str | None = None,
+        coordinator_lease_token: str | None = None,
+    ) -> None:
+        if (coordinator_id is None) != (coordinator_lease_token is None):
+            raise ValueError(
+                "Coordinator identity and token must be supplied together."
+            )
+        query = (
             select(WorkflowRunRecord)
             .where(WorkflowRunRecord.run_id == workflow_run.run_id)
             .where(WorkflowRunRecord.workflow_id == workflow_run.workflow_id)
-            .options(selectinload(WorkflowRunRecord.task_runs))
+        )
+        if coordinator_id is not None:
+            if coordinator_lease_token is None:
+                raise ValueError(
+                    "Coordinator identity and token must be supplied together."
+                )
+            query = (
+                query.where(WorkflowRunRecord.coordinator_id == coordinator_id)
+                .where(
+                    WorkflowRunRecord.coordinator_lease_token == coordinator_lease_token
+                )
+                .where(
+                    WorkflowRunRecord.coordinator_lease_expires_at > datetime.now(UTC)
+                )
+            )
+            query = query.with_for_update()
+        result = await self._session.execute(
+            query.options(selectinload(WorkflowRunRecord.task_runs))
         )
         record = result.scalar_one_or_none()
         if record is None:
+            if coordinator_id is not None:
+                raise CoordinatorLeaseLostError(workflow_run.run_id)
             raise WorkflowRunNotFoundError(workflow_run.run_id)
 
         _record_state_events(self._session, record, record.task_runs, workflow_run)

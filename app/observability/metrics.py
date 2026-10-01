@@ -302,6 +302,25 @@ def record_dispatch_reconciled(count: int) -> None:
         registry.inc_counter("fluxion_dispatch_reconciled_total", amount=count)
 
 
+def record_run_coordinator_claim(outcome: str, count: int = 1) -> None:
+    registry.inc_counter(
+        "fluxion_run_coordinator_claims_total", {"outcome": outcome}, amount=count
+    )
+
+
+def record_run_coordinator_renewal(outcome: str) -> None:
+    registry.inc_counter("fluxion_run_coordinator_renewals_total", {"outcome": outcome})
+
+
+def record_run_coordinator_release(outcome: str) -> None:
+    registry.inc_counter("fluxion_run_coordinator_releases_total", {"outcome": outcome})
+
+
+def record_run_coordinator_pass(claimed: int) -> None:
+    registry.inc_counter("fluxion_run_coordinator_passes_total")
+    registry.observe_histogram("fluxion_run_coordinator_claimed_per_pass", claimed)
+
+
 def _labels(labels: dict[str, str] | None) -> tuple[tuple[str, str], ...]:
     return tuple(sorted((labels or {}).items()))
 

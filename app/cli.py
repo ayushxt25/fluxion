@@ -14,6 +14,7 @@ def main() -> None:
         "scheduler",
         "publisher",
         "reconciler",
+        "coordinator",
         "reaper",
         "worker",
         "webhook",
@@ -26,6 +27,7 @@ def main() -> None:
     args = parser.parse_args()
     from app.runtime import (
         api,
+        coordinator,
         demo,
         publisher,
         reaper,
@@ -42,6 +44,7 @@ def main() -> None:
         "scheduler": scheduler.main,
         "publisher": publisher.main,
         "reconciler": reconciler.main,
+        "coordinator": coordinator.main,
         "reaper": reaper.main,
         "worker": worker.main,
         "webhooks": webhooks.main,

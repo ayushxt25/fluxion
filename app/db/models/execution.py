@@ -55,6 +55,14 @@ class WorkflowRunRecord(Base):
     scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     trigger_event_id: Mapped[str | None] = mapped_column(String(36))
     event_subscription_id: Mapped[str | None] = mapped_column(String(36))
+    coordinator_id: Mapped[str | None] = mapped_column(String(255))
+    coordinator_lease_token: Mapped[str | None] = mapped_column(String(255))
+    coordinator_lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    coordinator_last_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
 
     task_runs: Mapped[list["TaskRunRecord"]] = relationship(
         back_populates="workflow_run",
@@ -210,6 +218,13 @@ Index(
     "ix_task_runs_status_next_retry_at",
     TaskRunRecord.status,
     TaskRunRecord.next_retry_at,
+)
+
+Index(
+    "ix_workflow_runs_coordinator_claimable",
+    WorkflowRunRecord.coordinator_lease_expires_at,
+    WorkflowRunRecord.run_id,
+    postgresql_where=WorkflowRunRecord.status.in_(("PENDING", "RUNNING")),
 )
 
 Index(

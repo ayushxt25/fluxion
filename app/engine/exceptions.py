@@ -189,6 +189,13 @@ class WorkerLeaseError(Exception):
     """Base exception for worker lease ownership failures."""
 
 
+class CoordinatorLeaseLostError(PersistenceError):
+    def __init__(self, run_id: str) -> None:
+        super().__init__(
+            f"Coordinator lease for workflow run '{run_id}' is no longer current."
+        )
+
+
 class LeaseClaimError(WorkerLeaseError):
     def __init__(self, run_id: str, task_id: str, reason: str) -> None:
         super().__init__(f"Could not claim run '{run_id}' task '{task_id}': {reason}")

@@ -155,6 +155,42 @@ def test_ineligible_runs_are_retained(status, completed_at):
     in_db(body)
 
 
+def test_active_coordinator_lease_does_not_make_a_nonterminal_run_retention_eligible():
+    async def body(session):
+        old = datetime.now(UTC) - timedelta(days=31)
+        await add_run(session, "owned", status="RUNNING", completed_at=old)
+        async with session.begin():
+            record = await session.get(WorkflowRunRecord, "owned")
+            record.coordinator_id = "coordinator-a"
+            record.coordinator_lease_token = "internal-token"
+            record.coordinator_lease_expires_at = datetime.now(UTC) + timedelta(
+                seconds=30
+            )
+        summary = await retention(session).run_retention(categories=("workflow_runs",))
+
+        assert summary.total_deleted == 0
+        assert await session.get(WorkflowRunRecord, "owned") is not None
+
+    in_db(body)
+
+
+def test_terminal_run_with_stale_coordinator_metadata_is_still_retained_normally():
+    async def body(session):
+        old = datetime.now(UTC) - timedelta(days=31)
+        await add_run(session, "terminal-owned", completed_at=old)
+        async with session.begin():
+            record = await session.get(WorkflowRunRecord, "terminal-owned")
+            record.coordinator_id = "former-coordinator"
+            record.coordinator_lease_token = "old-internal-token"
+            record.coordinator_lease_expires_at = old
+        summary = await retention(session).run_retention(categories=("workflow_runs",))
+
+        assert summary.total_deleted == 1
+        assert await session.get(WorkflowRunRecord, "terminal-owned") is None
+
+    in_db(body)
+
+
 def test_retention_deletes_old_pinned_run_without_deleting_revisions():
     async def body(session):
         old = datetime.now(UTC) - timedelta(days=31)

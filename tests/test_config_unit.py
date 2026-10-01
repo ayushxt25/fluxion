@@ -69,6 +69,22 @@ def test_dispatch_reconciliation_settings_have_safe_defaults() -> None:
     assert settings.dispatch_reconcile_poll_interval_seconds > 0
 
 
+def test_run_coordinator_settings_require_a_heartbeat_before_expiry() -> None:
+    settings = Settings()
+
+    assert settings.run_coordinator_lease_seconds > 0
+    assert settings.run_coordinator_heartbeat_seconds > 0
+    assert (
+        settings.run_coordinator_heartbeat_seconds
+        < settings.run_coordinator_lease_seconds
+    )
+    assert settings.run_coordinator_poll_interval_seconds > 0
+    assert settings.run_coordinator_batch_size > 0
+
+    with pytest.raises(ValidationError):
+        Settings(run_coordinator_lease_seconds=10, run_coordinator_heartbeat_seconds=10)
+
+
 def test_observability_configuration_validation() -> None:
     settings = Settings(
         log_level="debug",

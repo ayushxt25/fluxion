@@ -112,6 +112,15 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  coordinator:
+    image: fluxion:local
+    build: .
+    command: ["fluxion-coordinator"]
+    environment: *app-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   reaper:
     image: fluxion:local
     build: .

@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     retention_batch_size: int = 500
     retention_poll_interval_seconds: float = 3600
     schedule_runner_poll_seconds: float = 1
+    run_coordinator_lease_seconds: float = 30
+    run_coordinator_heartbeat_seconds: float = 10
+    run_coordinator_poll_interval_seconds: float = 1
+    run_coordinator_batch_size: int = 100
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -132,6 +136,19 @@ class Settings(BaseSettings):
             raise ValueError("LEASE_REAPER_INTERVAL_SECONDS must be positive.")
         if self.schedule_runner_poll_seconds <= 0:
             raise ValueError("SCHEDULE_RUNNER_POLL_SECONDS must be positive.")
+        if self.run_coordinator_lease_seconds <= 0:
+            raise ValueError("RUN_COORDINATOR_LEASE_SECONDS must be positive.")
+        if self.run_coordinator_heartbeat_seconds <= 0:
+            raise ValueError("RUN_COORDINATOR_HEARTBEAT_SECONDS must be positive.")
+        if self.run_coordinator_heartbeat_seconds >= self.run_coordinator_lease_seconds:
+            raise ValueError(
+                "RUN_COORDINATOR_HEARTBEAT_SECONDS must be less than "
+                "RUN_COORDINATOR_LEASE_SECONDS."
+            )
+        if self.run_coordinator_poll_interval_seconds <= 0:
+            raise ValueError("RUN_COORDINATOR_POLL_INTERVAL_SECONDS must be positive.")
+        if self.run_coordinator_batch_size < 1:
+            raise ValueError("RUN_COORDINATOR_BATCH_SIZE must be at least 1.")
         if self.jwt_algorithm != "HS256":
             raise ValueError("JWT_ALGORITHM must be HS256.")
         if self.jwt_access_token_minutes <= 0:

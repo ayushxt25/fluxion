@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from app.core.config import get_settings
 from app.engine.exceptions import DispatchError, PersistenceError, WorkerLeaseError
 from app.observability.metrics import record_scheduler_tick_dispatches
+from app.services.coordinator import RunCoordinator, RunCoordinatorPassResult
 from app.services.leases import LeaseReaper, LeaseReclaimResult
 from app.services.outbox import (
     DispatchOutboxPublisher,
@@ -158,6 +159,40 @@ class DispatchReconcilerLoop:
                 await _sleep_or_stop(stop_event, self._poll_seconds)
         finally:
             logger.info("Dispatch reconciler loop stopped.")
+
+
+class RunCoordinatorLoop:
+    def __init__(
+        self,
+        coordinator: RunCoordinator,
+        *,
+        poll_seconds: float | None = None,
+    ) -> None:
+        settings = get_settings()
+        self._coordinator = coordinator
+        self._poll_seconds = (
+            poll_seconds
+            if poll_seconds is not None
+            else settings.run_coordinator_poll_interval_seconds
+        )
+        if self._poll_seconds <= 0:
+            raise ValueError("poll_seconds must be positive.")
+
+    async def tick(self) -> RunCoordinatorPassResult:
+        return await self._coordinator.coordinate_once()
+
+    async def run(self, stop_event: asyncio.Event) -> None:
+        logger.info("Run coordinator loop started.")
+        try:
+            while not stop_event.is_set():
+                try:
+                    await self.tick()
+                except PersistenceError:
+                    logger.exception("Run coordinator tick failed.")
+                await _sleep_or_stop(stop_event, self._poll_seconds)
+        finally:
+            await self._coordinator.release_all()
+            logger.info("Run coordinator loop stopped.")
 
 
 class LeaseReaperLoop:

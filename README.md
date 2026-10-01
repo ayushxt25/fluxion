@@ -538,15 +538,25 @@ and worker services are currently a foundation, not a full distributed runtime.
 Interrupted tasks are not retried automatically, and recovery does not
 guarantee exactly-once effects for external side effects performed before a
 crash. The idempotency key is an identity primitive only; tasks are responsible
-for using it with external systems. Concurrent multi-process resume is not
-supported; Fluxion does not yet provide distributed run ownership or resume
-coordination. The outbox provides at-least-once publication intent, not
+for using it with external systems. The outbox provides at-least-once publication intent, not
 exactly-once delivery or exactly-once execution. The dispatch reconciler can
 make a stale published dispatch publishable again when PostgreSQL still shows
 the attempt as unclaimed and `DISPATCHED`; it preserves the same attempt and
 dispatch identity. Redis duplicates remain possible. It does not retry work
 that obtained worker ownership or became interrupted, because external side
 effects may be ambiguous.
+
+## Distributed Run Coordination
+
+Fluxion supports multiple coordinator processes through PostgreSQL-backed
+workflow-run coordinator leases. A coordinator receives an opaque fencing token
+when it claims an eligible nonterminal run, renews it with a heartbeat, and may
+be replaced only after expiry. A stale coordinator cannot renew or release a
+newer lease. Coordinator ownership is separate from worker task-execution
+leases, does not use Redis, and graceful release is only an optimization;
+expiry provides crash takeover. Interrupted work remains conservative and is
+not automatically retried. Run coordination does not provide exactly-once
+external side effects.
 Duplicate Redis delivery may occur, and workers reject messages that do not
 match durable PostgreSQL state. Expired leases are treated conservatively: the
 attempt and task become `INTERRUPTED` and the workflow becomes `FAILED`;
