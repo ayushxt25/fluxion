@@ -147,10 +147,11 @@ def test_intervention_retry_creates_one_new_attempt_and_outbox() -> None:
         intervention = (
             await session.execute(select(TaskInterventionRecord))
         ).scalar_one()
+        intervention_id = intervention.id
         await session.rollback()
 
         result = await TaskInterventionService(session).resolve(
-            intervention.id,
+            intervention_id,
             action="RETRY",
             subject="admin-1",
             role="ADMIN",
@@ -202,17 +203,18 @@ def test_intervention_fail_preserves_interrupted_attempt_without_dispatch() -> N
         intervention = (
             await session.execute(select(TaskInterventionRecord))
         ).scalar_one()
+        intervention_id = intervention.id
         await session.rollback()
 
         result = await TaskInterventionService(session).resolve(
-            intervention.id,
+            intervention_id,
             action="FAIL",
             subject="admin-1",
             role="ADMIN",
         )
         with pytest.raises(InterventionConflictError):
             await TaskInterventionService(session).resolve(
-                intervention.id,
+                intervention_id,
                 action="FAIL",
                 subject="admin-1",
                 role="ADMIN",
@@ -384,12 +386,14 @@ def test_stale_intervention_cannot_create_another_attempt() -> None:
         intervention = (
             await session.execute(select(TaskInterventionRecord))
         ).scalar_one()
+        intervention_id = intervention.id
+        workflow_id = intervention.workflow_id
         await session.rollback()
         async with session.begin():
             session.add(
                 TaskAttemptRecord(
                     run_id=run_id,
-                    workflow_id=intervention.workflow_id,
+                    workflow_id=workflow_id,
                     task_id="task",
                     attempt_number=2,
                     status=AttemptStatus.DISPATCHED.value,
@@ -397,7 +401,7 @@ def test_stale_intervention_cannot_create_another_attempt() -> None:
             )
         with pytest.raises(InterventionConflictError):
             await TaskInterventionService(session).resolve(
-                intervention.id,
+                intervention_id,
                 action="RETRY",
                 subject="admin",
                 role="ADMIN",
@@ -523,26 +527,29 @@ async def test_stale_intervention_retry_api_conflicts_without_audit_success() ->
                     )
                 )
             ).scalar_one()
+            intervention_id = intervention.id
+            workflow_id = intervention.workflow_id
+            task_id = intervention.task_id
             await session.rollback()
             async with session.begin():
                 session.add(
                     TaskAttemptRecord(
                         run_id=run_id,
-                        workflow_id=intervention.workflow_id,
-                        task_id=intervention.task_id,
+                        workflow_id=workflow_id,
+                        task_id=task_id,
                         attempt_number=2,
                         status=AttemptStatus.DISPATCHED.value,
                     )
                 )
 
         response = await client.post(
-            f"/api/v1/ops/interventions/{intervention.id}/retry",
+            f"/api/v1/ops/interventions/{intervention_id}/retry",
             json={"reason": "approved"},
             headers=auth_headers(Role.ADMIN),
         )
 
         async with factory() as session:
-            current = await session.get(TaskInterventionRecord, intervention.id)
+            current = await session.get(TaskInterventionRecord, intervention_id)
             attempts = (
                 (
                     await session.execute(
@@ -629,8 +636,18 @@ def test_intervention_transition_logs_are_sanitized(caplog) -> None:
             role="ADMIN",
         )
 
-    caplog.set_level(logging.INFO)
-    _in_db(body)
+    loggers = (
+        logging.getLogger("app.services.repositories"),
+        logging.getLogger("app.services.interventions"),
+    )
+    for logger in loggers:
+        logger.setLevel(logging.INFO)
+        logger.addHandler(caplog.handler)
+    try:
+        _in_db(body)
+    finally:
+        for logger in loggers:
+            logger.removeHandler(caplog.handler)
     events = {getattr(record, "event", None) for record in caplog.records}
     assert {
         "task.intervention.required",

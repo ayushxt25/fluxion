@@ -530,6 +530,7 @@ def test_pending_intervention_protects_then_resolved_allows_run_cleanup():
         assert await session.get(WorkflowRunRecord, "intervention-run") is not None
         assert await session.get(TaskAttemptRecord, ("intervention-run", "task", 1))
         assert await session.get(TaskInterventionRecord, "pending-intervention")
+        await session.rollback()
 
         async with session.begin():
             intervention = await session.get(
