@@ -302,6 +302,24 @@ def record_dispatch_reconciled(count: int) -> None:
         registry.inc_counter("fluxion_dispatch_reconciled_total", amount=count)
 
 
+def record_task_intervention_created() -> None:
+    registry.inc_counter("fluxion_task_interventions_created_total")
+
+
+def record_task_intervention_resolution(*, action: str, outcome: str) -> None:
+    registry.inc_counter(
+        "fluxion_task_intervention_resolutions_total",
+        {"action": action, "outcome": outcome},
+    )
+
+
+def record_task_intervention_conflict(*, action: str) -> None:
+    registry.inc_counter(
+        "fluxion_task_intervention_conflicts_total",
+        {"action": action},
+    )
+
+
 def record_run_coordinator_claim(outcome: str, count: int = 1) -> None:
     registry.inc_counter(
         "fluxion_run_coordinator_claims_total", {"outcome": outcome}, amount=count

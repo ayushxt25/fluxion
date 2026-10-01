@@ -13,6 +13,7 @@ from app.db.models.execution import (
     TaskRunRecord,
     WorkflowRunRecord,
 )
+from app.db.models.interventions import TaskInterventionRecord
 from app.db.models.logs import TaskLogRecord
 from app.db.models.webhooks import WebhookDeliveryRecord
 from app.observability.metrics import (
@@ -100,6 +101,12 @@ class RetentionRepository:
                 .order_by(WebhookDeliveryRecord.created_at, WebhookDeliveryRecord.id)
             )
         elif category == "dispatch_outbox":
+            pending_intervention = exists(
+                select(TaskInterventionRecord.id).where(
+                    TaskInterventionRecord.run_id == DispatchOutboxRecord.run_id,
+                    TaskInterventionRecord.resolution == "PENDING",
+                )
+            )
             query = (
                 select(DispatchOutboxRecord.id)
                 .where(
@@ -107,6 +114,7 @@ class RetentionRepository:
                     | (DispatchOutboxRecord.discarded_at.is_not(None))
                 )
                 .where(DispatchOutboxRecord.created_at < cutoff)
+                .where(~pending_intervention)
                 .order_by(DispatchOutboxRecord.created_at, DispatchOutboxRecord.id)
             )
         elif category == "run_events":
@@ -128,6 +136,12 @@ class RetentionRepository:
                     DispatchOutboxRecord.discarded_at.is_(None),
                 )
             )
+            pending_intervention = exists(
+                select(TaskInterventionRecord.id).where(
+                    TaskInterventionRecord.run_id == WorkflowRunRecord.run_id,
+                    TaskInterventionRecord.resolution == "PENDING",
+                )
+            )
             query = (
                 select(WorkflowRunRecord.run_id)
                 .where(
@@ -135,6 +149,7 @@ class RetentionRepository:
                     WorkflowRunRecord.completed_at.is_not(None),
                     WorkflowRunRecord.completed_at < cutoff,
                     ~actionable_outbox,
+                    ~pending_intervention,
                 )
                 .order_by(WorkflowRunRecord.completed_at, WorkflowRunRecord.run_id)
             )
@@ -202,6 +217,18 @@ class RetentionRepository:
                 )
                 if actionable_outbox:
                     continue
+                pending_intervention = await self._session.scalar(
+                    select(
+                        exists(
+                            select(TaskInterventionRecord.id).where(
+                                TaskInterventionRecord.run_id == run_id,
+                                TaskInterventionRecord.resolution == "PENDING",
+                            )
+                        )
+                    )
+                )
+                if pending_intervention:
+                    continue
                 event_ids = select(RunEventRecord.id).where(
                     RunEventRecord.run_id == run_id
                 )
@@ -216,6 +243,11 @@ class RetentionRepository:
                 await self._session.execute(
                     delete(DispatchOutboxRecord).where(
                         DispatchOutboxRecord.run_id == run_id
+                    )
+                )
+                await self._session.execute(
+                    delete(TaskInterventionRecord).where(
+                        TaskInterventionRecord.run_id == run_id
                     )
                 )
                 await self._session.execute(

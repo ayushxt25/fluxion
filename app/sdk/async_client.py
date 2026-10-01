@@ -32,6 +32,8 @@ from app.sdk.models import (
     RunEventList,
     SchedulerTickResult,
     TaskAttemptList,
+    TaskIntervention,
+    TaskInterventionList,
     TaskLogList,
     TaskRun,
     WebhookDelivery,
@@ -137,6 +139,41 @@ class AsyncFluxionClient:
 
     async def reconcile_dispatches(self) -> DispatchReconcileResult:
         return await self.ops.reconcile_dispatches()
+
+    async def list_interventions(
+        self, *, limit: int = 50, offset: int = 0
+    ) -> TaskInterventionList:
+        return await self._model(
+            "GET",
+            "/api/v1/ops/interventions",
+            TaskInterventionList,
+            params={"limit": limit, "offset": offset},
+        )
+
+    async def get_intervention(self, intervention_id: str) -> TaskIntervention:
+        return await self._model(
+            "GET", f"/api/v1/ops/interventions/{intervention_id}", TaskIntervention
+        )
+
+    async def retry_intervention(
+        self, intervention_id: str, *, reason: str | None = None
+    ) -> TaskIntervention:
+        return await self._model(
+            "POST",
+            f"/api/v1/ops/interventions/{intervention_id}/retry",
+            TaskIntervention,
+            json={"reason": reason},
+        )
+
+    async def fail_intervention(
+        self, intervention_id: str, *, reason: str | None = None
+    ) -> TaskIntervention:
+        return await self._model(
+            "POST",
+            f"/api/v1/ops/interventions/{intervention_id}/fail",
+            TaskIntervention,
+            json={"reason": reason},
+        )
 
     async def create_workflow(self, workflow: Workflow) -> Workflow:
         return await self._model(

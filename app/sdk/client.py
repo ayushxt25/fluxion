@@ -30,6 +30,8 @@ from app.sdk.models import (
     RunEventList,
     SchedulerTickResult,
     TaskAttemptList,
+    TaskIntervention,
+    TaskInterventionList,
     TaskLogList,
     TaskRun,
     WebhookDelivery,
@@ -134,6 +136,41 @@ class FluxionClient:
 
     def reconcile_dispatches(self) -> DispatchReconcileResult:
         return self.ops.reconcile_dispatches()
+
+    def list_interventions(
+        self, *, limit: int = 50, offset: int = 0
+    ) -> TaskInterventionList:
+        return self._model(
+            "GET",
+            "/api/v1/ops/interventions",
+            TaskInterventionList,
+            params={"limit": limit, "offset": offset},
+        )
+
+    def get_intervention(self, intervention_id: str) -> TaskIntervention:
+        return self._model(
+            "GET", f"/api/v1/ops/interventions/{intervention_id}", TaskIntervention
+        )
+
+    def retry_intervention(
+        self, intervention_id: str, *, reason: str | None = None
+    ) -> TaskIntervention:
+        return self._model(
+            "POST",
+            f"/api/v1/ops/interventions/{intervention_id}/retry",
+            TaskIntervention,
+            json={"reason": reason},
+        )
+
+    def fail_intervention(
+        self, intervention_id: str, *, reason: str | None = None
+    ) -> TaskIntervention:
+        return self._model(
+            "POST",
+            f"/api/v1/ops/interventions/{intervention_id}/fail",
+            TaskIntervention,
+            json={"reason": reason},
+        )
 
     def create_workflow(self, workflow: Workflow) -> Workflow:
         return self._model(

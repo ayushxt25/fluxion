@@ -13,10 +13,14 @@ from app.api.dependencies import (
 from app.api.pagination import LimitQuery, OffsetQuery
 from app.core.config import get_settings
 from app.dispatch.transport import RedisTaskDispatcher
+from app.engine.exceptions import PersistenceError
 from app.schemas.api import (
     AuditEventListResponse,
     AuditEventResponse,
     DispatchReconcileResponse,
+    InterventionListResponse,
+    InterventionResolutionRequest,
+    InterventionResponse,
     LeaseReapResponse,
     OutboxPublishResponse,
     RetentionRunRequest,
@@ -25,6 +29,10 @@ from app.schemas.api import (
 )
 from app.security.models import Principal, Role
 from app.services.audit import AuditEventRepository, AuditService
+from app.services.interventions import (
+    InterventionConflictError,
+    TaskInterventionService,
+)
 from app.services.leases import LeaseReaper
 from app.services.loops import LeaseReaperLoop, SchedulerLoop
 from app.services.outbox import DispatchOutboxPublisher, DispatchReconciler
@@ -38,6 +46,136 @@ from app.services.retention import RetentionRepository, RetentionService
 from app.services.scheduler import WorkflowScheduler
 
 router = APIRouter(prefix="/ops", tags=["operations"])
+
+
+def _intervention_response(item) -> InterventionResponse:
+    return InterventionResponse(**item.__dict__)
+
+
+@router.get(
+    "/interventions",
+    response_model=InterventionListResponse,
+    dependencies=[
+        Depends(require_role(Role.ADMIN)),
+        Depends(require_rate_limit(ops=True)),
+    ],
+)
+async def list_interventions(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    limit: LimitQuery = 50,
+    offset: OffsetQuery = 0,
+) -> InterventionListResponse:
+    items = await TaskInterventionService(session).list(limit=limit, offset=offset)
+    return InterventionListResponse(
+        items=tuple(_intervention_response(item) for item in items),
+        limit=limit,
+        offset=offset,
+        count=len(items),
+    )
+
+
+@router.get(
+    "/interventions/{intervention_id}",
+    response_model=InterventionResponse,
+    dependencies=[
+        Depends(require_role(Role.ADMIN)),
+        Depends(require_rate_limit(ops=True)),
+    ],
+)
+async def get_intervention(
+    intervention_id: str, session: Annotated[AsyncSession, Depends(get_db_session)]
+) -> InterventionResponse:
+    try:
+        return _intervention_response(
+            await TaskInterventionService(session).get(intervention_id)
+        )
+    except PersistenceError as exc:
+        raise HTTPException(
+            status_code=404, detail="Intervention was not found."
+        ) from exc
+
+
+async def _resolve_intervention(
+    action: str,
+    intervention_id: str,
+    body: InterventionResolutionRequest,
+    request: Request,
+    session: AsyncSession,
+    principal: Principal,
+) -> InterventionResponse:
+    try:
+        item = await TaskInterventionService(session).resolve(
+            intervention_id,
+            action=action,
+            subject=principal.subject,
+            role=principal.role.value,
+            reason=body.reason,
+        )
+    except InterventionConflictError as exc:
+        raise HTTPException(
+            status_code=409, detail="Intervention cannot be resolved."
+        ) from exc
+    except PersistenceError as exc:
+        raise HTTPException(
+            status_code=404, detail="Intervention was not found."
+        ) from exc
+    await AuditService(AuditEventRepository(session)).record_success(
+        request_id=getattr(request.state, "request_id", ""),
+        principal=principal,
+        action=f"intervention.{action.lower()}",
+        resource_type="task_intervention",
+        resource_id=item.id,
+        metadata={
+            "intervention_id": item.id,
+            "workflow_id": item.workflow_id,
+            "run_id": item.run_id,
+            "task_id": item.task_id,
+            "interrupted_attempt_number": item.interrupted_attempt_number,
+            "resolution": item.resolution,
+            "resulting_attempt_number": item.resulting_attempt_number,
+        },
+    )
+    return _intervention_response(item)
+
+
+@router.post(
+    "/interventions/{intervention_id}/retry",
+    response_model=InterventionResponse,
+    dependencies=[
+        Depends(require_role(Role.ADMIN)),
+        Depends(require_rate_limit(ops=True)),
+    ],
+)
+async def retry_intervention(
+    intervention_id: str,
+    body: InterventionResolutionRequest,
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[Principal, Depends(get_current_principal)],
+) -> InterventionResponse:
+    return await _resolve_intervention(
+        "RETRY", intervention_id, body, request, session, principal
+    )
+
+
+@router.post(
+    "/interventions/{intervention_id}/fail",
+    response_model=InterventionResponse,
+    dependencies=[
+        Depends(require_role(Role.ADMIN)),
+        Depends(require_rate_limit(ops=True)),
+    ],
+)
+async def fail_intervention(
+    intervention_id: str,
+    body: InterventionResolutionRequest,
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    principal: Annotated[Principal, Depends(get_current_principal)],
+) -> InterventionResponse:
+    return await _resolve_intervention(
+        "FAIL", intervention_id, body, request, session, principal
+    )
 
 
 def _retention_response(summary) -> RetentionSummaryResponse:

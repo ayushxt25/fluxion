@@ -21,6 +21,28 @@ class DispatchReconcileResult(SDKModel):
     reconciled_event_ids: tuple[str, ...]
 
 
+class TaskIntervention(SDKModel):
+    id: str
+    workflow_id: str
+    run_id: str
+    task_id: str
+    interrupted_attempt_number: int
+    resolution: str
+    created_at: datetime
+    resolved_at: datetime | None
+    resolver_subject: str | None
+    resolver_role: str | None
+    reason: str | None
+    resulting_attempt_number: int | None
+
+
+class TaskInterventionList(SDKModel):
+    items: tuple[TaskIntervention, ...]
+    limit: int
+    offset: int
+    count: int
+
+
 class Readiness(SDKModel):
     status: str
     checks: dict[str, str]

@@ -17,6 +17,7 @@ from app.db.models.execution import (
     TaskRunRecord,
     WorkflowRunRecord,
 )
+from app.db.models.interventions import TaskInterventionRecord
 from app.db.models.logs import TaskLogRecord
 from app.db.models.webhooks import WebhookDeliveryRecord, WebhookSubscriptionRecord
 from app.db.models.workflow import (
@@ -493,5 +494,95 @@ def test_audit_and_outbox_retention_are_bounded_and_idempotent():
         assert (
             await service.run_retention(categories=("audit_events",))
         ).total_deleted == 0
+
+    in_db(body)
+
+
+def test_pending_intervention_protects_then_resolved_allows_run_cleanup():
+    async def body(session):
+        old = datetime.now(UTC) - timedelta(days=31)
+        await add_run(session, "intervention-run", status="FAILED", completed_at=old)
+        await add_task_run(session, "intervention-run")
+        await add_attempt(session, "intervention-run")
+        async with session.begin():
+            task = await session.get(TaskRunRecord, ("intervention-run", "task"))
+            attempt = await session.get(
+                TaskAttemptRecord,
+                ("intervention-run", "task", 1),
+            )
+            task.status = "INTERRUPTED"
+            attempt.status = "INTERRUPTED"
+            session.add(
+                TaskInterventionRecord(
+                    id="pending-intervention",
+                    workflow_id="wf",
+                    run_id="intervention-run",
+                    task_id="task",
+                    interrupted_attempt_number=1,
+                    resolution="PENDING",
+                )
+            )
+
+        service = retention(session)
+        assert (
+            await service.run_retention(categories=("workflow_runs",))
+        ).total_deleted == 0
+        assert await session.get(WorkflowRunRecord, "intervention-run") is not None
+        assert await session.get(TaskAttemptRecord, ("intervention-run", "task", 1))
+        assert await session.get(TaskInterventionRecord, "pending-intervention")
+
+        async with session.begin():
+            intervention = await session.get(
+                TaskInterventionRecord,
+                "pending-intervention",
+            )
+            intervention.resolution = "FAIL"
+            intervention.resolved_at = datetime.now(UTC)
+        assert (
+            await service.run_retention(categories=("workflow_runs",))
+        ).total_deleted == 1
+        assert await session.get(WorkflowRunRecord, "intervention-run") is None
+        assert await session.get(TaskInterventionRecord, "pending-intervention") is None
+
+    in_db(body)
+
+
+def test_run_delete_rechecks_pending_intervention_after_candidate_selection():
+    async def body(session):
+        old = datetime.now(UTC) - timedelta(days=31)
+        await add_run(session, "retention-race", status="FAILED", completed_at=old)
+        await add_task_run(session, "retention-race")
+        await add_attempt(session, "retention-race")
+        repository = RetentionRepository(session)
+        async with session.begin():
+            candidate_ids = await repository._ids(
+                "workflow_runs",
+                datetime.now(UTC) - timedelta(days=30),
+                10,
+                lock=True,
+            )
+            assert candidate_ids == ("retention-race",)
+            task = await session.get(TaskRunRecord, ("retention-race", "task"))
+            attempt = await session.get(
+                TaskAttemptRecord,
+                ("retention-race", "task", 1),
+            )
+            task.status = "INTERRUPTED"
+            attempt.status = "INTERRUPTED"
+            session.add(
+                TaskInterventionRecord(
+                    id="race-pending-intervention",
+                    workflow_id="wf",
+                    run_id="retention-race",
+                    task_id="task",
+                    interrupted_attempt_number=1,
+                    resolution="PENDING",
+                )
+            )
+            assert await repository._delete("workflow_runs", candidate_ids) == 0
+
+        assert await session.get(WorkflowRunRecord, "retention-race") is not None
+        assert await session.get(TaskAttemptRecord, ("retention-race", "task", 1))
+        assert await session.get(TaskInterventionRecord, "race-pending-intervention")
 
     in_db(body)

@@ -282,3 +282,29 @@ class RetentionSummaryResponse(BaseModel):
     total_deleted: int
     started_at: datetime
     completed_at: datetime
+
+
+class InterventionResolutionRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=1024)
+
+
+class InterventionResponse(BaseModel):
+    id: str
+    workflow_id: str
+    run_id: str
+    task_id: str
+    interrupted_attempt_number: int
+    resolution: str
+    created_at: datetime
+    resolved_at: datetime | None
+    resolver_subject: str | None
+    resolver_role: str | None
+    reason: str | None
+    resulting_attempt_number: int | None
+
+
+class InterventionListResponse(BaseModel):
+    items: tuple[InterventionResponse, ...]
+    limit: int
+    offset: int
+    count: int

@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -13,6 +14,7 @@ from app.db.models.execution import (
     TaskRunRecord,
     WorkflowRunRecord,
 )
+from app.db.models.interventions import TaskInterventionRecord
 from app.db.models.workflow import (
     TaskDefinitionRecord,
     TaskDependencyRecord,
@@ -38,8 +40,11 @@ from app.engine.exceptions import (
 )
 from app.engine.execution import TaskAttempt, WorkflowRun
 from app.engine.status import AttemptStatus, TaskStatus, WorkflowStatus
+from app.observability.metrics import record_task_intervention_created
 from app.schemas.workflow import RetryPolicy, TaskDefinition, WorkflowDefinition
 from app.services.events import RunEventRepository
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -1502,6 +1507,7 @@ class TaskAttemptRepository:
         attempt_ref: ExpiredTaskAttemptRef,
         now: datetime,
     ) -> bool:
+        intervention: TaskInterventionRecord | None = None
         async with self._session.begin():
             record = await self._session.get(
                 TaskAttemptRecord,
@@ -1527,6 +1533,24 @@ class TaskAttemptRepository:
             record.lease_token = None
             record.lease_expires_at = None
             record.last_heartbeat_at = None
+            existing = await self._session.scalar(
+                select(TaskInterventionRecord.id).where(
+                    TaskInterventionRecord.run_id == attempt_ref.run_id,
+                    TaskInterventionRecord.task_id == attempt_ref.task_id,
+                    TaskInterventionRecord.interrupted_attempt_number
+                    == attempt_ref.attempt_number,
+                )
+            )
+            if existing is None:
+                intervention = TaskInterventionRecord(
+                    id=str(uuid4()),
+                    workflow_id=attempt_ref.workflow_id,
+                    run_id=attempt_ref.run_id,
+                    task_id=attempt_ref.task_id,
+                    interrupted_attempt_number=attempt_ref.attempt_number,
+                    resolution="PENDING",
+                )
+                self._session.add(intervention)
             RunEventRepository(self._session).record(
                 run_id=attempt_ref.run_id,
                 workflow_id=attempt_ref.workflow_id,
@@ -1535,6 +1559,21 @@ class TaskAttemptRepository:
                 task_id=attempt_ref.task_id,
                 attempt_number=attempt_ref.attempt_number,
                 payload={"status": AttemptStatus.INTERRUPTED.value},
+            )
+        if intervention is not None:
+            record_task_intervention_created()
+            logger.warning(
+                "Task intervention required.",
+                extra={
+                    "event": "task.intervention.required",
+                    "intervention_id": intervention.id,
+                    "workflow_id": intervention.workflow_id,
+                    "run_id": intervention.run_id,
+                    "task_id": intervention.task_id,
+                    "interrupted_attempt_number": (
+                        intervention.interrupted_attempt_number
+                    ),
+                },
             )
         return True
 

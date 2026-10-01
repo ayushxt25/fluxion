@@ -487,9 +487,12 @@ non-null `completed_at` older than `RETENTION_COMPLETED_RUN_DAYS`; historical
 terminal rows without that timestamp are retained conservatively. Pending and
 running runs are never eligible. Active webhook deliveries protect their events
 and runs, and actionable outbox rows (`published_at` and `discarded_at` both
-null) protect their run. Cleanup uses bounded batches, oldest-first ordering,
-and `SKIP LOCKED`, so concurrent workers are safe. External archival storage is
-not implemented yet.
+null) protect their run. A pending ambiguous-execution intervention also
+protects its run, task, and interrupted-attempt history until an administrator
+resolves it; resolved interventions are removed with the rest of an eligible
+execution tree. Cleanup uses bounded batches, oldest-first ordering, and `SKIP
+LOCKED`, so concurrent workers are safe. External archival storage is not
+implemented yet.
 
 Configure policy with `RETENTION_COMPLETED_RUN_DAYS`,
 `RETENTION_TASK_LOG_DAYS`, `RETENTION_RUN_EVENT_DAYS`,
@@ -535,11 +538,12 @@ executable tasks is not meaningful.
 
 The original direct executor remains single-process and local. Redis dispatch
 and worker services are currently a foundation, not a full distributed runtime.
-Interrupted tasks are not retried automatically, and recovery does not
-guarantee exactly-once effects for external side effects performed before a
-crash. The idempotency key is an identity primitive only; tasks are responsible
-for using it with external systems. The outbox provides at-least-once publication intent, not
-exactly-once delivery or exactly-once execution. The dispatch reconciler can
+Interrupted tasks are not retried automatically; an administrator must make an
+explicit ambiguity-resolution decision. Recovery does not guarantee exactly-once
+effects for external side effects performed before a crash. The idempotency key
+is an identity primitive only; tasks are responsible for using it with external
+systems. The outbox provides at-least-once publication intent, not exactly-once
+delivery or exactly-once execution. The dispatch reconciler can
 make a stale published dispatch publishable again when PostgreSQL still shows
 the attempt as unclaimed and `DISPATCHED`; it preserves the same attempt and
 dispatch identity. Redis duplicates remain possible. It does not retry work
@@ -557,6 +561,24 @@ leases, does not use Redis, and graceful release is only an optimization;
 expiry provides crash takeover. Interrupted work remains conservative and is
 not automatically retried. Run coordination does not provide exactly-once
 external side effects.
+
+## Ambiguous Execution Resolution
+
+`INTERRUPTED` means worker ownership was lost after task execution may have
+started, so external side effects may already have occurred. Fluxion never
+automatically retries that state. Lease reaping creates one durable `PENDING`
+intervention for the interrupted attempt, and only an `admin` may choose
+`RETRY` or `FAIL` through the operational intervention endpoints.
+
+`RETRY` creates a new task attempt and durable dispatch intent; the original
+interrupted attempt remains immutable history. The task idempotency key remains
+stable, but the new attempt has a new attempt identity. Retrying can repeat
+external side effects, so tasks and callers must use external-system
+idempotency where needed. `FAIL` records the decision and creates neither a
+new attempt nor a dispatch. Pending interventions protect the associated
+execution history from retention. These controls do not provide exactly-once
+execution or external side effects.
+
 Duplicate Redis delivery may occur, and workers reject messages that do not
 match durable PostgreSQL state. Expired leases are treated conservatively: the
 attempt and task become `INTERRUPTED` and the workflow becomes `FAILED`;
