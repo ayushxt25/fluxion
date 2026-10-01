@@ -1,7 +1,7 @@
 import asyncio
-import logging
 import os
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 from urllib.parse import urlparse
 
 import pytest
@@ -640,38 +640,32 @@ def test_intervention_transition_logs_are_sanitized() -> None:
             role="ADMIN",
         )
 
-    class RecordHandler(logging.Handler):
-        def __init__(self) -> None:
-            super().__init__()
-            self.records: list[logging.LogRecord] = []
-
-        def emit(self, record: logging.LogRecord) -> None:
-            self.records.append(record)
-
-    handler = RecordHandler()
-    loggers = (
-        logging.getLogger("app.services.repositories"),
-        logging.getLogger("app.services.interventions"),
-    )
-    original_levels = tuple(logger.level for logger in loggers)
-    for logger in loggers:
-        logger.setLevel(logging.INFO)
-        logger.addHandler(handler)
-    try:
+    with (
+        patch("app.services.repositories.logger.warning") as repository_warning,
+        patch("app.services.interventions.logger.info") as intervention_info,
+        patch("app.services.interventions.logger.warning") as intervention_warning,
+    ):
         _in_db(body)
-    finally:
-        for logger, level in zip(loggers, original_levels, strict=True):
-            logger.removeHandler(handler)
-            logger.setLevel(level)
-    events = {getattr(record, "event", None) for record in handler.records}
+
+    calls = (
+        repository_warning.call_args_list
+        + intervention_info.call_args_list
+        + intervention_warning.call_args_list
+    )
+
+    events = {
+        call.kwargs["extra"]["event"]
+        for call in calls
+        if call.kwargs.get("extra") and "event" in call.kwargs["extra"]
+    }
+
     assert {
         "task.intervention.required",
         "task.intervention.retry",
         "task.intervention.fail",
         "task.intervention.conflict",
     }.issubset(events)
-    rendered = "\n".join(
-        f"{record.getMessage()} {record.__dict__}" for record in handler.records
-    )
+
+    rendered = repr(calls)
     assert "worker-lease-token" not in rendered
     assert "postgresql://" not in rendered
