@@ -1,3 +1,3 @@
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 
 SCHEMA_REVISION = "20261001_0024"

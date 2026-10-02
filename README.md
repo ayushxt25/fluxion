@@ -15,6 +15,26 @@ task-level idempotency, and interrupted work is never retried automatically.
 See [deployment guidance](docs/DEPLOYMENT.md) for required production
 configuration, migration order, probes, scaling, and operational limitations.
 
+## Portfolio summary
+
+Fluxion is a PostgreSQL-backed distributed DAG execution engine with durable
+scheduling, transactional-outbox dispatch, Redis worker transport, fenced
+leases, retry and recovery controls, operator resolution of ambiguous
+execution, and reproducible end-to-end benchmarking.
+
+## Core capabilities
+
+- DAG workflows with immutable revisions, durable task attempts, and results
+- PostgreSQL canonical state with transactional outbox and Redis transport
+- At-least-once dispatch with worker and coordinator lease fencing
+- Retries, lost-message reconciliation, and explicit ambiguous-work recovery
+- Schedules, event triggers, signed webhooks, retention, metrics, and SDKs
+- Production-style runtimes, startup preflight, and benchmark tooling
+
+Read the [architecture](docs/ARCHITECTURE.md),
+[deployment guide](docs/DEPLOYMENT.md), [1.0 release notes](docs/RELEASE_1_0.md),
+and [benchmark-result methodology](docs/BENCHMARK_RESULTS.md) for details.
+
 ## Python SDK
 
 Fluxion ships a handwritten public Python SDK that uses only the REST API. It
@@ -112,17 +132,7 @@ and recovery. Retrieve them at the attempt logs endpoint or with
 secret field names are redacted. Logs are diagnostic-only, retained indefinitely
 for now, and persistence failures never alter canonical task success or failure.
 
-## Planned Capabilities
-
-- Workflow definitions and DAG validation
-- Durable workflow and task run state
-- Scheduling and dispatching
-- Worker execution, heartbeats, and lease-based ownership
-- Retries, task re-queuing, failure recovery, and idempotency
-- PostgreSQL persistence and Redis coordination
-- Concurrency control, observability, and horizontal scaling
-
-## Setup
+## Quick start
 
 ```bash
 python -m venv .venv
@@ -140,7 +150,8 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
-Copy `.env.example` to `.env` for local configuration.
+Copy `.env.example` to `.env` for local development configuration. Use Python
+3.11 or later. Fluxion requires reachable PostgreSQL and Redis.
 
 For local persistence, create PostgreSQL databases matching your configured
 `DATABASE_URL` and `TEST_DATABASE_URL`, then run:
@@ -159,14 +170,18 @@ After installing the package, Fluxion exposes console scripts:
 - `fluxion-api`
 - `fluxion-scheduler`
 - `fluxion-publisher`
+- `fluxion-reconciler`
+- `fluxion-coordinator`
 - `fluxion-reaper`
 - `fluxion-worker`
 - `fluxion-webhooks`
 - `fluxion-retention`
+- `fluxion-schedule-runner`
 - `fluxion-demo`
+- `fluxion-benchmark`
 
 The equivalent grouped command is
-`fluxion api|scheduler|publisher|reaper|worker|webhook|retention|demo`.
+`fluxion api|scheduler|publisher|reconciler|coordinator|reaper|worker|webhook|retention|schedule-runner|demo|benchmark`.
 Each process loads settings once, configures logging once, opens shared
 PostgreSQL/Redis resources for its role, and shuts down on `SIGINT`/`SIGTERM`.
 
@@ -431,9 +446,9 @@ python -m pytest -m stress -v
 The helpers use named checkpoints, events, and unique test resources. They do
 not enable fault injection in production and never use `FLUSHDB` or `FLUSHALL`.
 
-## Current Status
+## Durable webhooks
 
-Phase 28 adds durable external run notifications. Admins create subscriptions at
+Admins create subscriptions at
 `/api/v1/webhooks`; each matching durable `run_event` produces one delivery
 intent, which the `fluxion-webhooks` runtime sends as a signed JSON POST. The
 runtime is PostgreSQL-only, uses fenced claims, retries non-2xx/network failures
@@ -481,6 +496,9 @@ latency percentiles, maximum queue depth, and correctness violations. Invalid
 canonical state prevents a successful result. Benchmark results depend on the machine, PostgreSQL/Redis
 configuration, worker count, worker concurrency, and workload shape; Fluxion
 does not publish fixed throughput claims.
+
+Use [benchmark result methodology](docs/BENCHMARK_RESULTS.md) to record a
+measured run without treating a template as a performance claim.
 
 ## Retention and Lifecycle Management
 
@@ -599,10 +617,15 @@ and does not check dependencies; `/ready` verifies PostgreSQL and Redis with
 Prometheus registry support is not implemented yet, and `/metrics` should be
 protected by network controls in production.
 
-There is no public login, user database, OAuth/OIDC provider, refresh token
-flow, per-workflow ACL, SIEM export, OpenTelemetry tracing, external log
-service, alerting system, object/blob result store, or rate-limit fallback store yet. Worker
-implementations must already be deployed and registered in worker processes.
+## Limitations
+
+Fluxion provides at-least-once delivery and execution, not exactly-once external
+effects. There is no public login, user database, OAuth/OIDC provider, refresh
+token flow, per-workflow ACL, SIEM export, OpenTelemetry tracing, external log
+service, alerting system, object/blob result store, rate-limit fallback store,
+or multi-region consensus. Metrics are process-local unless an external
+aggregation system is configured. Worker implementations must already be
+deployed and registered in worker processes.
 The API does not expose lease tokens, and unpublished outbox dispatches whose
 task is later cancelled are discarded instead of being published as stale Redis
 messages.
@@ -610,7 +633,7 @@ The built-in demo task pack is intentionally tiny and side-effect free. Real
 deployments should replace or extend the registry hook with their own audited
 task implementations.
 
-For Phase 2, a failed task or individually cancelled task marks the workflow run
+An ordinary failed task or individually cancelled task marks the workflow run
 as failed because successful completion is no longer possible. Explicit workflow
 cancellation marks remaining non-terminal tasks as cancelled and sets the run to
 cancelled.

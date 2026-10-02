@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "fluxion"
 dynamic = ["version"]
-description = "A distributed workflow execution engine under active development."
+description = "A PostgreSQL-backed distributed DAG workflow execution engine."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

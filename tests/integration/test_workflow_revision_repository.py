@@ -229,8 +229,8 @@ def test_child_insert_failure_rolls_back_header_and_reuses_revision(monkeypatch)
 def test_new_and_existing_runs_remain_pinned_to_immutable_revisions():
     async def body(session):
         workflow_repository = WorkflowRepository(session)
-        # The legacy row remains the transitional FK anchor until Phase 30A's
-        # storage cutover; immutable publishing itself is append-only.
+        # The legacy row remains the transitional FK anchor; immutable
+        # publishing itself is append-only.
         original = workflow()
         await workflow_repository.save(original)
         first = await workflow_repository.get_revision(original.id, 1)

@@ -145,7 +145,7 @@ jobs:
       - run: .package-venv/bin/fluxion --version
       - run: .package-venv/bin/fluxion --help
       - run: |
-          for command in fluxion-api fluxion-scheduler fluxion-publisher fluxion-reaper fluxion-worker fluxion-webhook fluxion-webhooks fluxion-demo; do
+          for command in fluxion-api fluxion-scheduler fluxion-publisher fluxion-reconciler fluxion-coordinator fluxion-reaper fluxion-worker fluxion-webhook fluxion-webhooks fluxion-retention fluxion-schedule-runner fluxion-demo fluxion-benchmark; do
             test -x ".package-venv/bin/$command"
             ".package-venv/bin/$command" --help
           done
