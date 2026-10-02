@@ -12,15 +12,20 @@ def main() -> int:
     config.set_main_option("script_location", str(root / "alembic"))
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
-    if heads != [SCHEMA_REVISION]:
-    raise SystemExit(
-        f"SCHEMA_REVISION {SCHEMA_REVISION!r} does not match Alembic head {heads!r}."
-    )
+
     if len(heads) != 1:
         raise SystemExit(f"Expected exactly one Alembic head, found: {heads}")
+
+    if heads != [SCHEMA_REVISION]:
+        raise SystemExit(
+            f"SCHEMA_REVISION {SCHEMA_REVISION!r} "
+            f"does not match Alembic head {heads!r}."
+        )
+
     for revision in script.walk_revisions(base="base", head=heads[0]):
         if revision.module is None:
             raise SystemExit(f"Could not import migration {revision.revision}.")
+
     print(f"Alembic chain is valid at head {heads[0]}.")
     return 0
 
