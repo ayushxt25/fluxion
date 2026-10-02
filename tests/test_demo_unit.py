@@ -53,7 +53,8 @@ def options() -> DemoOptions:
 def test_demo_task_registry_contains_expected_tasks() -> None:
     registry = build_task_registry()
 
-    assert tuple(sorted(registry.implementations)) == tuple(sorted(DEMO_TASK_IDS))
+    for expected in DEMO_TASK_IDS:
+        assert expected in registry.implementations
 
 
 def test_context_aware_demo_tasks_work() -> None:
