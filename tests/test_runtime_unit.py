@@ -191,6 +191,11 @@ def test_retention_runtime_runs_one_bounded_pass_without_redis(monkeypatch) -> N
     monkeypatch.setattr(retention, "create_async_engine", lambda _: FakeEngine())
     monkeypatch.setattr(retention, "async_sessionmaker", lambda *_, **__: fake_session)
     monkeypatch.setattr(retention, "RetentionService", FakeService)
+    
+    async def fake_preflight(**_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr(retention, "preflight", fake_preflight)
 
     asyncio.run(retention.run(stop_event, Settings(retention_enabled=True)))
     assert calls == ["run", "dispose"]
