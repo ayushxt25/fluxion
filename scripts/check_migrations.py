@@ -3,6 +3,8 @@ from pathlib import Path
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
+from app.version import SCHEMA_REVISION
+
 
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
@@ -10,6 +12,10 @@ def main() -> int:
     config.set_main_option("script_location", str(root / "alembic"))
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
+    if heads != [SCHEMA_REVISION]:
+    raise SystemExit(
+        f"SCHEMA_REVISION {SCHEMA_REVISION!r} does not match Alembic head {heads!r}."
+    )
     if len(heads) != 1:
         raise SystemExit(f"Expected exactly one Alembic head, found: {heads}")
     for revision in script.walk_revisions(base="base", head=heads[0]):
