@@ -57,10 +57,11 @@ def test_publisher_crash_window_allows_duplicate_transport_on_retry() -> None:
                 return ()
             return (self.event,)
 
-        async def is_dispatch_still_valid(self, event):
-            return True
+        async def find_valid_dispatch_event_ids(self, event_ids):
+            return frozenset(event_ids)
 
-        async def mark_published(self, event_id, published_at, **kwargs):
+        async def mark_published_batch(self, event_ids, published_at, **kwargs):
+            assert event_ids == (self.event.id,)
             if self.crash_before_mark:
                 self.crash_before_mark = False
                 raise InjectedFault("after.redis.publish.before.outbox.mark")

@@ -19,15 +19,15 @@ def message(task_id: str = "a") -> TaskDispatchMessage:
 
 
 class FakeOutboxRepository:
-    def __init__(self) -> None:
+    def __init__(self, event_count: int = 1) -> None:
         self.events = [
             DispatchOutboxEvent(
-                id="event-1",
+                id=f"event-{index}",
                 event_type="TASK_DISPATCH",
-                message=message(),
+                message=message(chr(ord("a") + index - 1)),
                 run_id="run-1",
                 workflow_id="workflow",
-                task_id="a",
+                task_id=chr(ord("a") + index - 1),
                 attempt_number=1,
                 created_at=datetime.now(UTC),
                 published_at=None,
@@ -38,12 +38,18 @@ class FakeOutboxRepository:
                 publish_attempts=0,
                 last_error=None,
             )
+            for index in range(1, event_count + 1)
         ]
         self.published = []
+        self.published_batches = []
+        self.discarded = []
         self.failures = []
 
-    async def is_dispatch_still_valid(self, event: DispatchOutboxEvent) -> bool:
-        return True
+    async def find_valid_dispatch_event_ids(
+        self,
+        event_ids: tuple[str, ...],
+    ) -> frozenset[str]:
+        return frozenset(event_ids)
 
     async def list_unpublished(self, limit: int = 100):
         return tuple(event for event in self.events if event.published_at is None)
@@ -57,7 +63,7 @@ class FakeOutboxRepository:
         limit: int = 100,
     ):
         claimed = []
-        for event in self.events:
+        for index, event in enumerate(self.events):
             if event.published_at is not None:
                 continue
             if event.claim_token is not None and event.claim_expires_at > now:
@@ -79,7 +85,7 @@ class FakeOutboxRepository:
                 publish_attempts=event.publish_attempts,
                 last_error=event.last_error,
             )
-            self.events[0] = claimed_event
+            self.events[index] = claimed_event
             claimed.append(claimed_event)
         return tuple(claimed[:limit])
 
@@ -92,10 +98,13 @@ class FakeOutboxRepository:
         claim_token: str | None = None,
     ) -> None:
         self.published.append((event_id, published_at))
-        event = self.events[0]
+        index = next(
+            index for index, event in enumerate(self.events) if event.id == event_id
+        )
+        event = self.events[index]
         assert event.claimed_by == publisher_id
         assert event.claim_token == claim_token
-        self.events[0] = DispatchOutboxEvent(
+        self.events[index] = DispatchOutboxEvent(
             id=event.id,
             event_type=event.event_type,
             message=event.message,
@@ -113,6 +122,59 @@ class FakeOutboxRepository:
             last_error=None,
         )
 
+    async def mark_published_batch(
+        self,
+        event_ids: tuple[str, ...],
+        published_at: datetime,
+        *,
+        publisher_id: str,
+        claim_token: str,
+    ) -> None:
+        self.published_batches.append(event_ids)
+        for event_id in event_ids:
+            await self.mark_published(
+                event_id,
+                published_at,
+                publisher_id=publisher_id,
+                claim_token=claim_token,
+            )
+
+    async def mark_discarded(
+        self,
+        event_id: str,
+        discarded_at: datetime,
+        reason: str,
+        *,
+        publisher_id: str | None = None,
+        claim_token: str | None = None,
+    ) -> None:
+        self.discarded.append((event_id, reason))
+        index = next(
+            index for index, event in enumerate(self.events) if event.id == event_id
+        )
+        event = self.events[index]
+        assert event.claimed_by == publisher_id
+        assert event.claim_token == claim_token
+        self.events[index] = DispatchOutboxEvent(
+            id=event.id,
+            event_type=event.event_type,
+            message=event.message,
+            run_id=event.run_id,
+            workflow_id=event.workflow_id,
+            task_id=event.task_id,
+            attempt_number=event.attempt_number,
+            created_at=event.created_at,
+            published_at=None,
+            claimed_by=None,
+            claim_token=None,
+            claimed_at=None,
+            claim_expires_at=None,
+            publish_attempts=event.publish_attempts,
+            last_error=event.last_error,
+            discarded_at=discarded_at,
+            discard_reason=reason,
+        )
+
     async def record_publish_failure(
         self,
         event_id: str,
@@ -122,10 +184,13 @@ class FakeOutboxRepository:
         claim_token: str | None = None,
     ) -> None:
         self.failures.append((event_id, error))
-        event = self.events[0]
+        index = next(
+            index for index, event in enumerate(self.events) if event.id == event_id
+        )
+        event = self.events[index]
         assert event.claimed_by == publisher_id
         assert event.claim_token == claim_token
-        self.events[0] = DispatchOutboxEvent(
+        self.events[index] = DispatchOutboxEvent(
             id=event.id,
             event_type=event.event_type,
             message=event.message,
@@ -169,5 +234,74 @@ def test_outbox_publish_failure_remains_retryable() -> None:
         assert repository.failures[0][0] == "event-1"
         assert second.published == 1
         assert dispatcher.messages == [message()]
+        assert repository.published_batches == [("event-1",)]
+
+    asyncio.run(scenario())
+
+
+def test_outbox_publisher_acknowledges_successes_in_one_batch() -> None:
+    class Dispatcher:
+        async def dispatch(self, dispatch_message: TaskDispatchMessage) -> None:
+            return None
+
+    async def scenario() -> None:
+        repository = FakeOutboxRepository(event_count=2)
+        result = await DispatchOutboxPublisher(
+            repository, Dispatcher()
+        ).publish_pending()
+
+        assert result.published_event_ids == ("event-1", "event-2")
+        assert repository.published_batches == [("event-1", "event-2")]
+        assert all(event.published_at is not None for event in repository.events)
+        assert all(event.claimed_by is None for event in repository.events)
+        assert all(event.claim_token is None for event in repository.events)
+        assert all(event.publish_attempts == 1 for event in repository.events)
+
+    asyncio.run(scenario())
+
+
+def test_outbox_publisher_excludes_redis_failures_from_batch_acknowledgment() -> None:
+    async def scenario() -> None:
+        repository = FakeOutboxRepository(event_count=2)
+        result = await DispatchOutboxPublisher(
+            repository, FlakyDispatcher()
+        ).publish_pending()
+
+        assert result.failed_event_ids == ("event-1",)
+        assert result.published_event_ids == ("event-2",)
+        assert repository.published_batches == [("event-2",)]
+        assert repository.events[0].published_at is None
+        assert repository.events[1].published_at is not None
+
+    asyncio.run(scenario())
+
+
+def test_outbox_publisher_discards_batch_targets_without_canonical_rows() -> None:
+    class Repository(FakeOutboxRepository):
+        async def find_valid_dispatch_event_ids(
+            self,
+            event_ids: tuple[str, ...],
+        ) -> frozenset[str]:
+            # event-2 represents a missing task row and event-3 a missing attempt.
+            return frozenset(
+                event_id for event_id in event_ids if event_id == "event-1"
+            )
+
+    class Dispatcher:
+        async def dispatch(self, dispatch_message: TaskDispatchMessage) -> None:
+            return None
+
+    async def scenario() -> None:
+        repository = Repository(event_count=3)
+        result = await DispatchOutboxPublisher(
+            repository, Dispatcher()
+        ).publish_pending()
+
+        assert result.published_event_ids == ("event-1",)
+        assert result.discarded_event_ids == ("event-2", "event-3")
+        assert repository.published_batches == [("event-1",)]
+        assert repository.events[0].published_at is not None
+        assert repository.events[1].discarded_at is not None
+        assert repository.events[2].discarded_at is not None
 
     asyncio.run(scenario())

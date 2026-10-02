@@ -24,6 +24,12 @@ class OutboxPublishResult:
     published_event_ids: tuple[str, ...]
     failed_event_ids: tuple[str, ...]
     discarded_event_ids: tuple[str, ...] = ()
+    claim_seconds: float = 0.0
+    validity_check_seconds: float = 0.0
+    dispatch_seconds: float = 0.0
+    mark_published_seconds: float = 0.0
+    discard_seconds: float = 0.0
+    failure_record_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -57,6 +63,8 @@ class DispatchOutboxPublisher:
 
     async def publish_pending(self, limit: int = 100) -> OutboxPublishResult:
         claim_token = str(uuid4())
+
+        claim_started = time.perf_counter()
         events = await self._outbox_repository.claim_unpublished(
             self.publisher_id,
             claim_token,
@@ -64,13 +72,35 @@ class DispatchOutboxPublisher:
             self._claim_seconds,
             limit,
         )
+        claim_seconds = time.perf_counter() - claim_started
+
         published_event_ids = []
         failed_event_ids = []
         discarded_event_ids = []
+        successfully_dispatched = []
+
+        validity_check_seconds = 0.0
+        dispatch_seconds = 0.0
+        mark_published_seconds = 0.0
+        discard_seconds = 0.0
+        failure_record_seconds = 0.0
+
+        started_at = {event.id: time.perf_counter() for event in events}
+        valid_event_ids = frozenset()
+        if events:
+            validity_started = time.perf_counter()
+            valid_event_ids = (
+                await self._outbox_repository.find_valid_dispatch_event_ids(
+                    tuple(event.id for event in events)
+                )
+            )
+            validity_check_seconds = time.perf_counter() - validity_started
 
         for event in events:
-            started = time.perf_counter()
-            if not await self._outbox_repository.is_dispatch_still_valid(event):
+            started = started_at[event.id]
+
+            if event.id not in valid_event_ids:
+                discard_started = time.perf_counter()
                 await self._outbox_repository.mark_discarded(
                     event.id,
                     datetime.now(UTC),
@@ -78,45 +108,30 @@ class DispatchOutboxPublisher:
                     publisher_id=self.publisher_id,
                     claim_token=claim_token,
                 )
+                discard_seconds += time.perf_counter() - discard_started
+
                 discarded_event_ids.append(event.id)
                 record_outbox_publish(
                     outcome="discarded",
                     duration_seconds=time.perf_counter() - started,
                 )
                 continue
+
             try:
+                dispatch_started = time.perf_counter()
                 await self._dispatcher.dispatch(event.message)
+                dispatch_seconds += time.perf_counter() - dispatch_started
+
             except DispatchError as exc:
+                failure_started = time.perf_counter()
                 await self._outbox_repository.record_publish_failure(
                     event.id,
                     str(exc),
                     publisher_id=self.publisher_id,
                     claim_token=claim_token,
                 )
-                failed_event_ids.append(event.id)
-                record_outbox_publish(
-                    outcome="failed",
-                    duration_seconds=time.perf_counter() - started,
-                )
-                logger.warning(
-                    "Outbox publish failed.",
-                    extra={
-                        "event": "outbox.publish",
-                        "outcome": "failed",
-                        "workflow_id": event.workflow_id,
-                        "run_id": event.run_id,
-                        "task_id": event.task_id,
-                        "attempt_number": event.attempt_number,
-                    },
-                )
-                continue
-            except Exception as exc:
-                await self._outbox_repository.record_publish_failure(
-                    event.id,
-                    str(exc),
-                    publisher_id=self.publisher_id,
-                    claim_token=claim_token,
-                )
+                failure_record_seconds += time.perf_counter() - failure_started
+
                 failed_event_ids.append(event.id)
                 record_outbox_publish(
                     outcome="failed",
@@ -135,12 +150,47 @@ class DispatchOutboxPublisher:
                 )
                 continue
 
-            await self._outbox_repository.mark_published(
-                event.id,
+            except Exception as exc:
+                failure_started = time.perf_counter()
+                await self._outbox_repository.record_publish_failure(
+                    event.id,
+                    str(exc),
+                    publisher_id=self.publisher_id,
+                    claim_token=claim_token,
+                )
+                failure_record_seconds += time.perf_counter() - failure_started
+
+                failed_event_ids.append(event.id)
+                record_outbox_publish(
+                    outcome="failed",
+                    duration_seconds=time.perf_counter() - started,
+                )
+                logger.warning(
+                    "Outbox publish failed.",
+                    extra={
+                        "event": "outbox.publish",
+                        "outcome": "failed",
+                        "workflow_id": event.workflow_id,
+                        "run_id": event.run_id,
+                        "task_id": event.task_id,
+                        "attempt_number": event.attempt_number,
+                    },
+                )
+                continue
+
+            successfully_dispatched.append((event, started))
+
+        if successfully_dispatched:
+            mark_started = time.perf_counter()
+            await self._outbox_repository.mark_published_batch(
+                tuple(event.id for event, _ in successfully_dispatched),
                 datetime.now(UTC),
                 publisher_id=self.publisher_id,
                 claim_token=claim_token,
             )
+            mark_published_seconds += time.perf_counter() - mark_started
+
+        for event, started in successfully_dispatched:
             published_event_ids.append(event.id)
             record_outbox_publish(
                 outcome="success",
@@ -165,6 +215,12 @@ class DispatchOutboxPublisher:
             published_event_ids=tuple(published_event_ids),
             failed_event_ids=tuple(failed_event_ids),
             discarded_event_ids=tuple(discarded_event_ids),
+            claim_seconds=claim_seconds,
+            validity_check_seconds=validity_check_seconds,
+            dispatch_seconds=dispatch_seconds,
+            mark_published_seconds=mark_published_seconds,
+            discard_seconds=discard_seconds,
+            failure_record_seconds=failure_record_seconds,
         )
 
 

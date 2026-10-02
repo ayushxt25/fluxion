@@ -530,6 +530,164 @@ def test_stale_outbox_claim_cannot_mark_published_after_reclaim() -> None:
     run_in_db(body)
 
 
+def test_outbox_batch_acknowledgment_is_atomic_and_fenced() -> None:
+    async def body(session):
+        definition = workflow("wf-outbox-batch", task("a"), task("b"))
+        await persist_run(session, definition)
+        summary = await WorkflowScheduler(
+            WorkflowRepository(session),
+            WorkflowRunRepository(session),
+            TaskAttemptRepository(session),
+            InMemoryTaskDispatcher(),
+        ).dispatch_ready("run-1", max_dispatch=2)
+        outbox = DispatchOutboxRepository(session)
+        now = datetime.now(UTC)
+        claimed = await outbox.claim_unpublished("publisher-a", "token-a", now, 60, 2)
+        event_ids = tuple(event.id for event in claimed)
+
+        with pytest.raises(PersistenceError):
+            await outbox.mark_published_batch(
+                event_ids,
+                now,
+                publisher_id="publisher-b",
+                claim_token="token-a",
+            )
+        with pytest.raises(PersistenceError):
+            await outbox.mark_published_batch(
+                event_ids,
+                now,
+                publisher_id="publisher-a",
+                claim_token="token-b",
+            )
+        with pytest.raises(PersistenceError):
+            await outbox.mark_published_batch(
+                (*event_ids, "missing-event"),
+                now,
+                publisher_id="publisher-a",
+                claim_token="token-a",
+            )
+
+        after_failed_batches = await outbox.list_unpublished()
+        assert {event.id for event in after_failed_batches} == set(event_ids)
+        assert all(event.published_at is None for event in after_failed_batches)
+        assert all(event.claimed_by == "publisher-a" for event in after_failed_batches)
+        assert all(event.claim_token == "token-a" for event in after_failed_batches)
+
+        await outbox.mark_published_batch(
+            event_ids,
+            now,
+            publisher_id="publisher-a",
+            claim_token="token-a",
+        )
+        records = [
+            await session.get(models.DispatchOutboxRecord, event_id)
+            for event_id in event_ids
+        ]
+
+        assert summary.outbox_event_ids == event_ids
+        assert all(record is not None for record in records)
+        assert all(record.published_at == now for record in records)
+        assert all(record.claimed_by is None for record in records)
+        assert all(record.claim_token is None for record in records)
+        assert all(record.claimed_at is None for record in records)
+        assert all(record.claim_expires_at is None for record in records)
+        assert all(record.publish_attempts == 1 for record in records)
+        assert all(record.last_error is None for record in records)
+
+    run_in_db(body)
+
+
+def test_outbox_batch_acknowledgment_rejects_published_row_without_partial_update() -> (
+    None
+):
+    async def body(session):
+        definition = workflow("wf-outbox-batch-published", task("a"), task("b"))
+        await persist_run(session, definition)
+        summary = await WorkflowScheduler(
+            WorkflowRepository(session),
+            WorkflowRunRepository(session),
+            TaskAttemptRepository(session),
+            InMemoryTaskDispatcher(),
+        ).dispatch_ready("run-1", max_dispatch=2)
+        outbox = DispatchOutboxRepository(session)
+        now = datetime.now(UTC)
+        claimed = await outbox.claim_unpublished("publisher-a", "token-a", now, 60, 2)
+        event_ids = tuple(event.id for event in claimed)
+        await outbox.mark_published(
+            event_ids[0],
+            now,
+            publisher_id="publisher-a",
+            claim_token="token-a",
+        )
+
+        with pytest.raises(PersistenceError):
+            await outbox.mark_published_batch(
+                event_ids,
+                now + timedelta(seconds=1),
+                publisher_id="publisher-a",
+                claim_token="token-a",
+            )
+
+        first = await session.get(models.DispatchOutboxRecord, event_ids[0])
+        second = await session.get(models.DispatchOutboxRecord, event_ids[1])
+        assert summary.outbox_event_ids == event_ids
+        assert first is not None and first.published_at == now
+        assert first.claimed_by is None
+        assert first.claim_token is None
+        assert first.claimed_at is None
+        assert first.claim_expires_at is None
+        assert first.publish_attempts == 1
+        assert first.last_error is None
+        assert second is not None and second.published_at is None
+        assert second.claimed_by == "publisher-a"
+        assert second.claim_token == "token-a"
+        assert second.publish_attempts == 0
+
+    run_in_db(body)
+
+
+def test_outbox_batch_validity_discards_stale_or_missing_attempt() -> None:
+    async def body(session):
+        definition = workflow(
+            "wf-outbox-batch-validity",
+            task("a"),
+            task("b"),
+            task("c"),
+        )
+        await persist_run(session, definition)
+        dispatcher = InMemoryTaskDispatcher()
+        summary = await WorkflowScheduler(
+            WorkflowRepository(session),
+            WorkflowRunRepository(session),
+            TaskAttemptRepository(session),
+            dispatcher,
+        ).dispatch_ready("run-1", max_dispatch=3)
+
+        async with session.begin():
+            stale_task = await session.get(models.TaskRunRecord, ("run-1", "b"))
+            missing_attempt = await session.get(
+                models.TaskAttemptRecord,
+                ("run-1", "c", 1),
+            )
+            assert stale_task is not None
+            assert missing_attempt is not None
+            stale_task.status = TaskStatus.READY.value
+            await session.delete(missing_attempt)
+
+        result = await DispatchOutboxPublisher(
+            DispatchOutboxRepository(session),
+            dispatcher,
+        ).publish_pending()
+
+        assert result.published_event_ids == (summary.outbox_event_ids[0],)
+        assert result.discarded_event_ids == summary.outbox_event_ids[1:]
+        assert await dispatcher.receive(timeout=0.1) == summary.messages[0]
+        assert await dispatcher.receive(timeout=0.01) is None
+        assert await DispatchOutboxRepository(session).list_unpublished() == ()
+
+    run_in_db(body)
+
+
 def test_worker_success_persists_and_unlocks_dependent_without_dispatching_it() -> None:
     async def body(session):
         definition = workflow("wf-worker", task("a"), task("b", ("a",)))

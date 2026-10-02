@@ -898,6 +898,57 @@ class DispatchOutboxRepository:
             record.publish_attempts += 1
             record.last_error = None
 
+    async def mark_published_batch(
+        self,
+        event_ids: tuple[str, ...],
+        published_at: datetime,
+        *,
+        publisher_id: str,
+        claim_token: str,
+    ) -> None:
+        """Acknowledge a bounded, successfully dispatched publisher batch.
+
+        Every supplied row is locked and checked before any row is changed, so a
+        stale publisher cannot partially acknowledge another publisher's work.
+        """
+        if not event_ids or len(set(event_ids)) != len(event_ids):
+            raise PersistenceError(
+                "Dispatch outbox publication batch must contain unique event IDs."
+            )
+
+        async with self._session.begin():
+            result = await self._session.execute(
+                select(DispatchOutboxRecord)
+                .where(DispatchOutboxRecord.id.in_(event_ids))
+                .with_for_update()
+            )
+            records = tuple(result.scalars())
+            if len(records) != len(event_ids) or {
+                record.id for record in records
+            } != set(event_ids):
+                raise PersistenceError(
+                    "Dispatch outbox publication batch is incomplete."
+                )
+
+            for record in records:
+                if (
+                    record.claimed_by != publisher_id
+                    or record.claim_token != claim_token
+                    or record.published_at is not None
+                ):
+                    raise PersistenceError(
+                        "Dispatch outbox publication batch claim was lost."
+                    )
+
+            for record in records:
+                record.published_at = published_at
+                record.claimed_by = None
+                record.claim_token = None
+                record.claimed_at = None
+                record.claim_expires_at = None
+                record.publish_attempts += 1
+                record.last_error = None
+
     async def mark_discarded(
         self,
         event_id: str,
@@ -942,6 +993,42 @@ class DispatchOutboxRepository:
                 and task_record.status == TaskStatus.DISPATCHED.value
                 and attempt_record.status == AttemptStatus.DISPATCHED.value
             )
+
+    async def find_valid_dispatch_event_ids(
+        self,
+        event_ids: tuple[str, ...],
+    ) -> frozenset[str]:
+        """Return supplied outbox IDs whose canonical dispatch target is valid."""
+        if not event_ids:
+            return frozenset()
+
+        async with self._session.begin():
+            result = await self._session.execute(
+                select(DispatchOutboxRecord.id)
+                .join(
+                    TaskRunRecord,
+                    (TaskRunRecord.run_id == DispatchOutboxRecord.run_id)
+                    & (TaskRunRecord.workflow_id == DispatchOutboxRecord.workflow_id)
+                    & (TaskRunRecord.task_id == DispatchOutboxRecord.task_id),
+                )
+                .join(
+                    TaskAttemptRecord,
+                    (TaskAttemptRecord.run_id == DispatchOutboxRecord.run_id)
+                    & (
+                        TaskAttemptRecord.workflow_id
+                        == DispatchOutboxRecord.workflow_id
+                    )
+                    & (TaskAttemptRecord.task_id == DispatchOutboxRecord.task_id)
+                    & (
+                        TaskAttemptRecord.attempt_number
+                        == DispatchOutboxRecord.attempt_number
+                    ),
+                )
+                .where(DispatchOutboxRecord.id.in_(event_ids))
+                .where(TaskRunRecord.status == TaskStatus.DISPATCHED.value)
+                .where(TaskAttemptRecord.status == AttemptStatus.DISPATCHED.value)
+            )
+            return frozenset(result.scalars())
 
     async def record_publish_failure(
         self,
