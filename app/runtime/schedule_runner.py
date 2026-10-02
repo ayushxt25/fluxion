@@ -11,6 +11,7 @@ from app.runtime.bootstrap import (
     parse_runtime_arguments,
     run_async,
 )
+from app.runtime.preflight import preflight
 from app.services.schedules import ScheduleRunner
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ async def run() -> None:
     engine = create_async_engine(settings.database_url)
     sessions = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     try:
+        await preflight(role="schedule-runner", settings=settings, engine=engine)
         while not stop_event.is_set():
             try:
                 async with sessions() as session:

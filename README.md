@@ -3,40 +3,17 @@
 [![CI](https://github.com/ayushxt25/fluxion/actions/workflows/ci.yml/badge.svg)](https://github.com/ayushxt25/fluxion/actions/workflows/ci.yml)
 Python 3.11+
 
-Fluxion is a Python backend project that will grow into a distributed workflow
-execution engine for DAG-based workflows.
+Fluxion is a PostgreSQL-backed distributed workflow engine for DAG-based
+workflows. It uses a transactional dispatch outbox with Redis transport,
+worker leases and fencing, durable retries, immutable workflow revisions,
+run-coordinator fencing, and explicit operator resolution for ambiguous work.
+The REST control plane, SDK, operational runtimes, metrics, and Compose topology
+support a production-style multi-process deployment.
 
-The project is under active development. The current codebase includes the
-initial FastAPI repository foundation, health-check surface, workflow/task
-specification models, DAG validation, deterministic topological ordering,
-in-memory workflow run state, dependency-based task readiness transitions, and
-single-process local asynchronous workflow execution. Fluxion also includes
-PostgreSQL-backed persistence models, repositories, and Alembic migrations for
-workflow definitions, workflow run state, and durable local execution
-transitions. Fluxion can also recover persisted local crash states by marking
-abandoned `RUNNING` tasks as `INTERRUPTED` and can safely resume unambiguous
-incomplete durable runs. Task execution now records explicit attempts with
-configurable retry policy and deterministic exponential backoff. Task callables
-can also receive an immutable execution context containing stable attempt and
-task idempotency identities. Redis dispatch now uses a PostgreSQL transactional
-outbox so dispatch intent is durable before transport publication. Long-running
-scheduler, outbox publisher, and lease reaper loops are available as explicit
-engine services. Fluxion also exposes a versioned REST control plane for
-workflow definitions, durable run inspection, cancellation, recovery,
-continuation checks, and selected operational one-shot actions.
-Phase 17 adds structured request and engine logging, Prometheus-compatible
-process metrics at `/metrics`, and a readiness probe at `/ready`.
-Phase 18 adds process entrypoints and Docker Compose wiring for a local
-multi-process cluster with separate API, scheduler, publisher, reaper, worker,
-PostgreSQL, Redis, and migration roles.
-Phase 19 adds a built-in deterministic demo task pack and a `fluxion demo`
-smoke command that drives the public API and proves the distributed execution
-path through scheduler, transactional outbox, Redis, worker leasing, task
-execution, downstream unlock, and durable workflow success.
-Phase 20 adds durable JSON task results and direct dependency data passing
-through `TaskExecutionContext.dependency_results`.
-Phase 21 adds durable workflow run input and typed task parameter mappings from
-workflow input, direct dependency results, and literal JSON values.
+Fluxion remains at-least-once infrastructure: external side effects require
+task-level idempotency, and interrupted work is never retried automatically.
+See [deployment guidance](docs/DEPLOYMENT.md) for required production
+configuration, migration order, probes, scaling, and operational limitations.
 
 ## Python SDK
 
@@ -538,38 +515,12 @@ Admins can inspect configured eligibility without mutation via
 `preview_retention()` and `run_retention()` on both synchronous and asynchronous
 clients.
 
-Fluxion currently provides a modular async-first FastAPI skeleton, settings
-management, a health endpoint, immutable workflow specification models, and a
-validated workflow DAG abstraction. It also tracks in-memory workflow run state
-and task readiness based on completed dependencies, then can execute registered
-Python task callables locally with concurrent execution for independent ready
-tasks and optional local concurrency limiting. Workflow definitions and run/task
-state can be persisted in PostgreSQL through SQLAlchemy repositories and Alembic
-migrations. The local executor can persist task and workflow state transitions
-durably as it runs. Recovery can detect stale local `RUNNING` task state after a
-restart and reconcile readiness without executing task callables. Safe resume
-can continue `PENDING` or `RUNNING` durable runs that contain no `RUNNING`,
-`INTERRUPTED`, `FAILED`, or individually `CANCELLED` tasks. Previously
-`SUCCEEDED` tasks are not rerun; execution continues from persisted `READY`
-tasks. Ordinary callable failures can be retried according to each task's
-policy, with durable attempt history and `next_retry_at` state so retry timing
-survives process restart. Each task run has a durable deterministic
-`idempotency_key`, and each attempt exposes a deterministic `attempt_key` to
-context-aware task callables. Redis-backed dispatch is split across a scheduler,
-transactional dispatch outbox, explicit publisher, and worker. The scheduler
-persists `DISPATCHED` task attempts and matching outbox rows atomically; the
-publisher later claims outbox rows and sends versioned JSON messages to Redis.
-Outbox claim tokens and expiry reduce duplicate concurrent publication while
-remaining retryable after publisher crashes. Phase 11 adds worker lease
-ownership, heartbeat renewal, lease-token fencing, and explicit expired-lease
-reclaim. The REST API is a control plane only: it persists and inspects
-workflow state, but it does not upload task code or execute arbitrary task
-callables inside the API process. PostgreSQL remains the source of truth; Redis
-is only transport. Empty workflows are rejected because a workflow with zero
-executable tasks is not meaningful.
+The REST API is a control plane only: it persists and inspects workflow state,
+but it does not upload task code or execute arbitrary task callables inside the
+API process. PostgreSQL remains the source of truth; Redis is transport. Empty
+workflows are rejected because a workflow with zero executable tasks is not
+meaningful.
 
-The original direct executor remains single-process and local. Redis dispatch
-and worker services are currently a foundation, not a full distributed runtime.
 Interrupted tasks are not retried automatically; an administrator must make an
 explicit ambiguity-resolution decision. Recovery does not guarantee exactly-once
 effects for external side effects performed before a crash. The idempotency key

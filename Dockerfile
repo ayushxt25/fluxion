@@ -1,11 +1,13 @@
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONFAULTHANDLER=1 \
+    PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
-RUN adduser --disabled-password --gecos "" fluxion
+RUN adduser --disabled-password --gecos "" --uid 10001 fluxion
 
 COPY pyproject.toml README.md requirements-ci.txt ./
 COPY app ./app

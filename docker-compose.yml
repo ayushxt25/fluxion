@@ -31,6 +31,8 @@ services:
     image: fluxion:local
     command: ["alembic", "upgrade", "head"]
     environment: &app-env
+      APP_ENV: ${APP_ENV:-development}
+      DEBUG: ${DEBUG:-false}
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fluxion}:${POSTGRES_PASSWORD:-fluxion}@postgres:5432/${POSTGRES_DB:-fluxion}
       REDIS_URL: redis://redis:6379/0
       DISPATCH_QUEUE_NAME: ${DISPATCH_QUEUE_NAME:-fluxion:dispatch}
@@ -41,6 +43,7 @@ services:
       JWT_AUDIENCE: ${JWT_AUDIENCE:-fluxion-api}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
+      READINESS_TIMEOUT_SECONDS: ${READINESS_TIMEOUT_SECONDS:-2}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
       WORKER_SHUTDOWN_GRACE_SECONDS: ${WORKER_SHUTDOWN_GRACE_SECONDS:-30}
       SCHEDULER_MAX_DISPATCH_PER_RUN: ${SCHEDULER_MAX_DISPATCH_PER_RUN:-10}
@@ -51,6 +54,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    restart: "no"
 
   api:
     image: fluxion:local
@@ -74,6 +78,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
   scheduler:
     image: fluxion:local
@@ -83,6 +88,7 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    restart: unless-stopped
 
   schedule-runner:
     image: fluxion:local
@@ -93,6 +99,7 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    restart: unless-stopped
 
   publisher:
     image: fluxion:local
@@ -102,6 +109,7 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    restart: unless-stopped
 
   reconciler:
     image: fluxion:local
@@ -111,6 +119,7 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    restart: unless-stopped
 
   coordinator:
     image: fluxion:local
@@ -120,6 +129,7 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    restart: unless-stopped
 
   reaper:
     image: fluxion:local
@@ -129,6 +139,7 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    restart: unless-stopped
 
   worker:
     image: fluxion:local
@@ -138,6 +149,7 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    restart: unless-stopped
 
   webhooks:
     image: fluxion:local
@@ -147,6 +159,7 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    restart: unless-stopped
 
   retention:
     image: fluxion:local
@@ -154,6 +167,7 @@ services:
     profiles: ["maintenance"]
     command: ["fluxion-retention"]
     environment:
+      <<: *app-env
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-fluxion}:${POSTGRES_PASSWORD:-fluxion}@postgres:5432/${POSTGRES_DB:-fluxion}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}

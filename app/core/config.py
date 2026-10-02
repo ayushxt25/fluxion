@@ -1,12 +1,14 @@
 from functools import lru_cache
+from typing import Literal
+from urllib.parse import urlparse
 
-from pydantic import model_validator
+from pydantic import ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     app_name: str = "Fluxion"
-    app_env: str = "development"
+    app_env: Literal["development", "test", "benchmark", "production"] = "development"
     debug: bool = False
     api_host: str = "0.0.0.0"
     api_port: int = 8000
@@ -91,10 +93,22 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_worker_lease_settings(self) -> "Settings":
+        database = urlparse(self.database_url)
+        redis = urlparse(self.redis_url)
+        if database.scheme not in {"postgresql", "postgresql+asyncpg"}:
+            raise ValueError("DATABASE_URL must use PostgreSQL.")
+        if redis.scheme not in {"redis", "rediss"}:
+            raise ValueError("REDIS_URL must use redis or rediss.")
+        if not database.path or database.path == "/":
+            raise ValueError("DATABASE_URL must include a database name.")
+        if not redis.hostname:
+            raise ValueError("REDIS_URL must include a host.")
         if self.worker_lease_seconds <= 0:
             raise ValueError("WORKER_LEASE_SECONDS must be positive.")
-        if self.api_port <= 0:
-            raise ValueError("API_PORT must be positive.")
+        if not self.api_host.strip():
+            raise ValueError("API_HOST must not be empty.")
+        if not 0 < self.api_port <= 65535:
+            raise ValueError("API_PORT must be between 1 and 65535.")
         if self.worker_heartbeat_seconds <= 0:
             raise ValueError("WORKER_HEARTBEAT_SECONDS must be positive.")
         if self.worker_heartbeat_seconds >= self.worker_lease_seconds:
@@ -223,9 +237,55 @@ class Settings(BaseSettings):
             raise ValueError("Retention day settings must be at least one.")
         if self.retention_batch_size < 1 or self.retention_poll_interval_seconds <= 0:
             raise ValueError("Retention batch and poll settings are invalid.")
+        database_name = database.path.rstrip("/").rsplit("/", 1)[-1]
+        if self.app_env == "benchmark" and not database_name.endswith("_bench"):
+            raise ValueError("Benchmark deployments require a *_bench DATABASE_URL.")
+        if self.app_env == "production":
+            if not self.auth_enabled:
+                raise ValueError("AUTH_ENABLED must be true in production.")
+            if self.debug:
+                raise ValueError("DEBUG must be false in production.")
+            if self.log_format != "json":
+                raise ValueError("LOG_FORMAT must be json in production.")
+            if (
+                not self.jwt_secret
+                or len(self.jwt_secret) < 32
+                or self.jwt_secret.lower()
+                in {
+                    "replace-with-a-strong-development-secret",
+                    "secret",
+                    "changeme",
+                }
+            ):
+                raise ValueError(
+                    "A strong non-default JWT_SECRET is required in production."
+                )
+            if database_name.endswith("_bench"):
+                raise ValueError(
+                    "Production DATABASE_URL must not target a benchmark DB."
+                )
+            if self.database_url == (
+                "postgresql+asyncpg://fluxion:fluxion@localhost:5432/fluxion"
+            ):
+                raise ValueError(
+                    "Production DATABASE_URL must not use the development default."
+                )
+            if self.redis_url == "redis://localhost:6379/0":
+                raise ValueError(
+                    "Production REDIS_URL must not use the development default."
+                )
         return self
 
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    try:
+        return Settings()
+    except ValidationError as exc:
+        reasons = "; ".join(
+            error["msg"]
+            for error in exc.errors()
+        )
+        raise RuntimeError(
+            f"Fluxion configuration is invalid: {reasons}"
+        ) from None

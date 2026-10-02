@@ -15,6 +15,39 @@ def test_debug_defaults_to_disabled() -> None:
     assert Settings().debug is False
 
 
+def test_production_configuration_rejects_unsafe_auth_and_defaults() -> None:
+    production = {
+        "app_env": "production",
+        "database_url": "postgresql+asyncpg://user:pass@db:5432/fluxion",
+        "redis_url": "redis://redis:6379/0",
+        "jwt_secret": "a" * 32,
+    }
+    assert Settings(**production).app_env == "production"
+
+    for values in (
+        {**production, "auth_enabled": False},
+        {**production, "debug": True},
+        {**production, "jwt_secret": "short"},
+        {**production, "log_format": "text"},
+        {**production, "database_url": "postgresql+asyncpg://db/fluxion_bench"},
+    ):
+        with pytest.raises(ValidationError):
+            Settings(**values)
+
+
+def test_environment_and_connection_configuration_are_validated() -> None:
+    with pytest.raises(ValidationError):
+        Settings(app_env="staging")
+    with pytest.raises(ValidationError):
+        Settings(database_url="sqlite:///fluxion")
+    with pytest.raises(ValidationError):
+        Settings(redis_url="http://redis:6379")
+    with pytest.raises(ValidationError):
+        Settings(api_port=65536)
+    with pytest.raises(ValidationError):
+        Settings(app_env="benchmark", database_url="postgresql+asyncpg://db/fluxion")
+
+
 def test_worker_lease_configuration_rejects_invalid_values() -> None:
     with pytest.raises(ValidationError):
         Settings(worker_lease_seconds=0)

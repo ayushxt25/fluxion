@@ -1,6 +1,8 @@
 import argparse
 import asyncio
+import logging
 import signal
+import sys
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -10,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.core.config import Settings, get_settings
 from app.dispatch.transport import RedisTaskDispatcher
 from app.observability.logging import configure_logging
+from app.runtime.preflight import preflight
 from app.security.rate_limit import RedisRateLimiter
 
 
@@ -25,6 +28,15 @@ class RuntimeResources:
         await self.dispatcher.aclose()
         await self.rate_limiter.aclose()
         await self._engine.dispose()
+
+    async def preflight(self, role: str, *, require_redis: bool) -> None:
+        await preflight(
+            role=role,
+            settings=self.settings,
+            engine=self._engine,
+            dispatcher=self.dispatcher,
+            require_redis=require_redis,
+        )
 
 
 @asynccontextmanager
@@ -77,8 +89,18 @@ def _signal_handler(stop_event: asyncio.Event) -> Callable[[int, object], None]:
 
 
 def run_async(entrypoint: Callable[[], object]) -> None:
-    configure_runtime()
-    asyncio.run(entrypoint())
+    try:
+        configure_runtime()
+        asyncio.run(entrypoint())
+    except KeyboardInterrupt:
+        return
+    except Exception:
+        logging.getLogger(__name__).error(
+            "Fluxion service terminated during startup or runtime.",
+            extra={"event": "service.startup_failed"},
+        )
+        print("Fluxion service failed to start safely.", file=sys.stderr)
+        raise SystemExit(1) from None
 
 
 def parse_runtime_arguments(program: str, description: str) -> None:

@@ -25,6 +25,7 @@ from app.core.config import get_settings
 from app.db.session import engine
 from app.dispatch.transport import RedisTaskDispatcher
 from app.observability.logging import configure_logging
+from app.runtime.preflight import log_stopped, log_stopping, preflight
 from app.security.rate_limit import RedisRateLimiter
 
 
@@ -42,11 +43,20 @@ def create_app() -> FastAPI:
         app.state.redis_dispatcher = redis_dispatcher
         app.state.rate_limiter = rate_limiter
         try:
+            await preflight(
+                role="api",
+                settings=settings,
+                engine=engine,
+                dispatcher=redis_dispatcher,
+                require_redis=True,
+            )
             yield
         finally:
+            log_stopping("api")
             await redis_dispatcher.aclose()
             await rate_limiter.aclose()
             await engine.dispose()
+            log_stopped("api")
 
     app = FastAPI(
         title=settings.app_name,

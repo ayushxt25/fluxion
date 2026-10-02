@@ -35,6 +35,7 @@ async def run(stop_event: asyncio.Event | None = None) -> None:
         install_shutdown_handlers(stop_event)
     registry = build_task_registry()
     async with runtime_resources() as resources:
+        await resources.preflight("worker", require_redis=True)
         worker_id = str(uuid4())
         record_worker_capacity(settings.worker_concurrency)
         logger.info(

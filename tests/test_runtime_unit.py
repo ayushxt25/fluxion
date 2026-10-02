@@ -3,10 +3,12 @@ import tomllib
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import pytest
+
 from app import cli
 from app.core.config import Settings
 from app.engine.registry import TaskRegistry
-from app.runtime import bootstrap, coordinator, retention
+from app.runtime import bootstrap, coordinator, preflight, retention
 from app.tasks.registry import build_task_registry
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -89,6 +91,30 @@ def test_runtime_bootstrap_creates_and_closes_resources(monkeypatch) -> None:
     assert asyncio.run(scenario()) == (True, True, True)
 
 
+def test_startup_preflight_reports_sanitized_dependency_failure(monkeypatch) -> None:
+    class FailingEngine:
+        def connect(self):
+            raise AssertionError("connection should be awaited through context manager")
+
+    async def fail_database(*_args) -> None:
+        raise preflight.StartupPreflightError("PostgreSQL is unavailable.")
+
+    monkeypatch.setattr(preflight, "check_database", fail_database)
+    settings = Settings(
+        database_url="postgresql+asyncpg://user:password@db:5432/fluxion",
+        redis_url="redis://redis:6379/0",
+    )
+
+    with pytest.raises(preflight.StartupPreflightError, match="PostgreSQL"):
+        asyncio.run(
+            preflight.preflight(
+                role="worker",
+                settings=settings,
+                engine=FailingEngine(),
+            )
+        )
+
+
 def test_docker_compose_defines_required_services_and_migration() -> None:
     compose = (ROOT / "docker-compose.yml").read_text()
     for service in (
@@ -108,6 +134,8 @@ def test_docker_compose_defines_required_services_and_migration() -> None:
     assert "condition: service_completed_successfully" in compose
     assert "/health" in compose
     assert "JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set}" in compose
+    assert "APP_ENV: ${APP_ENV:-development}" in compose
+    assert "restart: unless-stopped" in compose
     assert "FLUSHDB" not in compose
     assert "FLUSHALL" not in compose
     assert "retention:" in compose
@@ -121,6 +149,7 @@ def test_dockerfile_uses_single_non_root_runtime_image() -> None:
 
     assert "FROM python:3.11-slim" in dockerfile
     assert "USER fluxion" in dockerfile
+    assert "--uid 10001 fluxion" in dockerfile
     assert 'CMD ["fluxion-api"]' in dockerfile
     assert "JWT_SECRET" not in dockerfile
 

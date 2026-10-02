@@ -10,6 +10,7 @@ from app.runtime.bootstrap import (
     parse_runtime_arguments,
     run_async,
 )
+from app.runtime.preflight import preflight
 from app.services.webhooks import WebhookDeliveryService, WebhookRepository
 
 
@@ -23,6 +24,7 @@ async def run(stop_event: asyncio.Event | None = None) -> None:
     engine = create_async_engine(settings.database_url)
     sessions = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     try:
+        await preflight(role="webhooks", settings=settings, engine=engine)
         while not stop_event.is_set():
             async with sessions() as session:
                 service = WebhookDeliveryService(

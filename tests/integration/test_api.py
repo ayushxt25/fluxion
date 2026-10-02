@@ -1,3 +1,4 @@
+import asyncio
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -71,6 +72,11 @@ class FakeRateLimiter:
 class FailingDispatcher(InMemoryTaskDispatcher):
     async def ping(self) -> None:
         raise RuntimeError("redis password=secret unreachable")
+
+
+class SlowDispatcher(InMemoryTaskDispatcher):
+    async def ping(self) -> None:
+        await asyncio.sleep(1)
 
 
 class FailingSession:
@@ -941,6 +947,27 @@ async def test_redis_readiness_failure_does_not_leak_connection_details() -> Non
             "checks": {"postgres": "ok", "redis": "failed"},
         }
         assert "secret" not in response.text
+
+
+async def test_readiness_timeout_is_bounded_and_liveness_remains_available() -> None:
+    previous_timeout = os.environ.get("READINESS_TIMEOUT_SECONDS")
+    os.environ["READINESS_TIMEOUT_SECONDS"] = "0.001"
+    get_settings.cache_clear()
+    try:
+        async with api_client(dispatcher=SlowDispatcher()) as (client, _):
+            health = await client.get("/health")
+            ready = await client.get("/ready")
+
+            assert health.status_code == 200
+            assert ready.status_code == 503
+            assert ready.json()["checks"]["redis"] == "failed"
+            assert "redis://" not in ready.text
+    finally:
+        if previous_timeout is None:
+            os.environ.pop("READINESS_TIMEOUT_SECONDS", None)
+        else:
+            os.environ["READINESS_TIMEOUT_SECONDS"] = previous_timeout
+        get_settings.cache_clear()
 
 
 async def test_postgres_readiness_failure_does_not_leak_connection_details() -> None:

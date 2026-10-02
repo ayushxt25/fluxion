@@ -10,6 +10,7 @@ from app.runtime.bootstrap import (
     parse_runtime_arguments,
     run_async,
 )
+from app.runtime.preflight import preflight
 from app.services.coordinator import RunCoordinator, RunCoordinatorRepository
 from app.services.loops import RunCoordinatorLoop
 from app.services.recovery import WorkflowRecoveryService
@@ -34,6 +35,7 @@ async def run(stop_event: asyncio.Event | None = None) -> None:
         class_=AsyncSession,
     )
     try:
+        await preflight(role="coordinator", settings=settings, engine=engine)
         async with session_factory() as session:
             workflow_repository = WorkflowRepository(session)
             run_repository = WorkflowRunRepository(session)

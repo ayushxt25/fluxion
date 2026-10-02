@@ -9,6 +9,7 @@ from app.runtime.bootstrap import (
     parse_runtime_arguments,
     run_async,
 )
+from app.runtime.preflight import preflight
 from app.services.loops import DispatchReconcilerLoop
 from app.services.outbox import DispatchReconciler
 from app.services.repositories import DispatchOutboxRepository
@@ -26,6 +27,7 @@ async def run(stop_event: asyncio.Event | None = None) -> None:
         engine, expire_on_commit=False, class_=AsyncSession
     )
     try:
+        await preflight(role="reconciler", settings=settings, engine=engine)
         async with session_factory() as session:
             reconciler = DispatchReconciler(
                 DispatchOutboxRepository(session),

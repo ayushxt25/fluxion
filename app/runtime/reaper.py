@@ -24,6 +24,7 @@ async def run(stop_event: asyncio.Event | None = None) -> None:
         runtime_resources() as resources,
         resources.session_factory() as session,
     ):
+        await resources.preflight("reaper", require_redis=False)
         reaper = LeaseReaper(
             WorkflowRepository(session),
             WorkflowRunRepository(session),
