@@ -29,6 +29,7 @@ def test_console_scripts_are_registered() -> None:
         "fluxion-retention": "app.runtime.retention:main",
         "fluxion-schedule-runner": "app.runtime.schedule_runner:main",
         "fluxion-demo": "app.runtime.demo:cli",
+        "fluxion-benchmark": "app.runtime.benchmark:cli",
     }
 
 
