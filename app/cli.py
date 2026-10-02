@@ -22,11 +22,13 @@ def main() -> None:
         "retention",
         "schedule-runner",
         "demo",
+        "benchmark",
     ):
         subcommands.add_parser(command, help=f"Run the Fluxion {command} runtime.")
-    args = parser.parse_args()
+    args, remaining = parser.parse_known_args()
     from app.runtime import (
         api,
+        benchmark,
         coordinator,
         demo,
         publisher,
@@ -52,5 +54,8 @@ def main() -> None:
         "retention": retention.main,
         "schedule-runner": schedule_runner.main,
         "demo": demo.cli,
+        "benchmark": lambda: benchmark.cli(remaining),
     }
+    if remaining and args.command != "benchmark":
+        parser.error("unrecognized arguments: " + " ".join(remaining))
     runtimes[args.command]()

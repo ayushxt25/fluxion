@@ -473,6 +473,38 @@ secret is never returned by the API. A delivery failure never changes workflow
 state. DNS resolution is checked before the request, but the connection is not
 DNS-pinned, so DNS rebinding remains a documented limitation.
 
+## Performance Benchmarking
+
+`fluxion benchmark` measures the complete distributed path: durable workflow
+creation, scheduler dispatch, transactional outbox, Redis transport, worker
+claim/fencing, task execution, and durable completion. It supports `single`,
+`linear`, and `fanout` workloads. Results measure submission through durable
+completion, not callable time alone.
+
+The command requires a dedicated `DATABASE_URL` PostgreSQL database whose name
+ends in `_bench`; it uses a unique Redis
+queue namespace and never runs `FLUSHDB` or `FLUSHALL`. It starts local real
+worker loops, so `--workers` and `--worker-concurrency` control local benchmark
+worker capacity without changing production services.
+
+The safe developer default is a `single` workload with 1,000 runs and one local
+worker. Use `--tasks-per-run` for `linear`, `--fanout` for `fanout`, and
+`--warmup-runs` to exclude warmup work from the measurement window.
+
+```bash
+DATABASE_URL=postgresql+asyncpg://localhost/fluxion_bench fluxion benchmark \
+  --workload single --runs 1000 --workers 2 --output benchmark-results/local.benchmark.json
+
+DATABASE_URL=postgresql+asyncpg://localhost/fluxion_bench fluxion benchmark \
+  --workload single --runs 100000 --workers 16 --output benchmark-results/100k.benchmark.json
+```
+
+The JSON result contains workload/configuration, total executions, throughput,
+latency percentiles, maximum queue depth, and correctness violations. Invalid
+canonical state prevents a successful result. Benchmark results depend on the machine, PostgreSQL/Redis
+configuration, worker count, worker concurrency, and workload shape; Fluxion
+does not publish fixed throughput claims.
+
 ## Retention and Lifecycle Management
 
 Retention is disabled by default (`RETENTION_ENABLED=false`). When enabled,
