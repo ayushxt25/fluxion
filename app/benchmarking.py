@@ -7,6 +7,7 @@ import math
 import platform
 import subprocess
 import sys
+import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from urllib.parse import urlparse
@@ -84,7 +85,10 @@ class BenchmarkResult:
     python_version: str
     platform: str
     started_at: str
+    execution_started_at: str
     completed_at: str
+    submission_duration_seconds: float
+    execution_duration_seconds: float
     duration_seconds: float
     workload: dict[str, int | str]
     configuration: dict[str, int | float]
@@ -187,7 +191,6 @@ async def run_benchmark(config: BenchmarkConfig, settings: Settings) -> Benchmar
     registry = build_task_registry()
     stop_workers = asyncio.Event()
     worker_tasks: list[asyncio.Task[None]] = []
-    started = datetime.now(UTC)
     max_queue_depth = 0
     scheduler_ticks = publisher_passes = dispatched = published = 0
     try:
@@ -224,7 +227,8 @@ async def run_benchmark(config: BenchmarkConfig, settings: Settings) -> Benchmar
                 config,
                 worker_tasks,
             )
-        started = datetime.now(UTC)
+        submission_started = datetime.now(UTC)
+
         async with factory() as session:
             for index in range(config.runs):
                 await WorkflowRunRepository(session).create(
@@ -233,12 +237,23 @@ async def run_benchmark(config: BenchmarkConfig, settings: Settings) -> Benchmar
                         workflow,
                     )
                 )
+
+        execution_started = datetime.now(UTC)
+
         (
             scheduler_ticks,
             publisher_passes,
             max_queue_depth,
             dispatched,
             published,
+            scheduler_total_seconds,
+            publisher_total_seconds,
+            publisher_claim_seconds,
+            publisher_validity_check_seconds,
+            publisher_dispatch_seconds,
+            publisher_mark_published_seconds,
+            publisher_discard_seconds,
+            publisher_failure_record_seconds,
         ) = await _drive_until_complete(
             factory,
             dispatcher,
@@ -247,18 +262,29 @@ async def run_benchmark(config: BenchmarkConfig, settings: Settings) -> Benchmar
             config,
             worker_tasks,
         )
+
         completed = datetime.now(UTC)
+
         return await _result(
             factory,
             workflow_id,
             config,
-            started,
+            submission_started,
+            execution_started,
             completed,
             scheduler_ticks,
             publisher_passes,
             max_queue_depth,
             dispatched,
             published,
+            scheduler_total_seconds,
+            publisher_total_seconds,
+            publisher_claim_seconds,
+            publisher_validity_check_seconds,
+            publisher_dispatch_seconds,
+            publisher_mark_published_seconds,
+            publisher_discard_seconds,
+            publisher_failure_record_seconds,
         )
     finally:
         stop_workers.set()
@@ -289,6 +315,14 @@ async def _drive_until_complete(
 ):
     deadline = asyncio.get_running_loop().time() + config.timeout_seconds
     scheduler_ticks = publisher_passes = max_depth = dispatched = published = 0
+    scheduler_total_seconds = 0.0
+    publisher_total_seconds = 0.0
+    publisher_claim_seconds = 0.0
+    publisher_validity_check_seconds = 0.0
+    publisher_dispatch_seconds = 0.0
+    publisher_mark_published_seconds = 0.0
+    publisher_discard_seconds = 0.0
+    publisher_failure_record_seconds = 0.0
     while True:
         worker_errors = [
             task.exception()
@@ -315,8 +349,19 @@ async def _drive_until_complete(
                 DispatchOutboxPublisher(DispatchOutboxRepository(session), dispatcher),
                 poll_seconds=config.poll_seconds,
             )
+            scheduler_started = time.perf_counter()
             scheduled = await scheduler.tick()
+            scheduler_total_seconds += time.perf_counter() - scheduler_started
+
+            publisher_started = time.perf_counter()
             publication = await publisher.tick()
+            publisher_total_seconds += time.perf_counter() - publisher_started
+            publisher_claim_seconds += publication.claim_seconds
+            publisher_validity_check_seconds += publication.validity_check_seconds
+            publisher_dispatch_seconds += publication.dispatch_seconds
+            publisher_mark_published_seconds += publication.mark_published_seconds
+            publisher_discard_seconds += publication.discard_seconds
+            publisher_failure_record_seconds += publication.failure_record_seconds
             scheduler_ticks += 1
             publisher_passes += 1
             dispatched += sum(
@@ -336,7 +381,21 @@ async def _drive_until_complete(
         if len(statuses) == run_count and all(
             status == "SUCCEEDED" for status in statuses
         ):
-            return scheduler_ticks, publisher_passes, max_depth, dispatched, published
+            return (
+                scheduler_ticks,
+                publisher_passes,
+                max_depth,
+                dispatched,
+                published,
+                scheduler_total_seconds,
+                publisher_total_seconds,
+                publisher_claim_seconds,
+                publisher_validity_check_seconds,
+                publisher_dispatch_seconds,
+                publisher_mark_published_seconds,
+                publisher_discard_seconds,
+                publisher_failure_record_seconds,
+            )
         if any(status in {"FAILED", "CANCELLED"} for status in statuses):
             raise RuntimeError("Benchmark workload reached a terminal failure.")
         if asyncio.get_running_loop().time() >= deadline:
@@ -350,13 +409,22 @@ async def _result(
     factory,
     workflow_id,
     config,
-    started,
+    submission_started,
+    execution_started,
     completed,
     ticks,
     passes,
     depth,
     dispatched,
     published,
+    scheduler_total_seconds,
+    publisher_total_seconds,
+    publisher_claim_seconds,
+    publisher_validity_check_seconds,
+    publisher_dispatch_seconds,
+    publisher_mark_published_seconds,
+    publisher_discard_seconds,
+    publisher_failure_record_seconds,
 ):
     measurement_runs = WorkflowRunRecord.run_id.like(f"{workflow_id}-measurement-%")
     async with factory() as session:
@@ -397,7 +465,18 @@ async def _result(
                 TaskInterventionRecord.resolution == "PENDING",
             )
         )
-    duration = max((completed - started).total_seconds(), 0.000001)
+    submission_duration = max(
+        (execution_started - submission_started).total_seconds(),
+        0.000001,
+    )
+    execution_duration = max(
+        (completed - execution_started).total_seconds(),
+        0.000001,
+    )
+    duration = max(
+        (completed - submission_started).total_seconds(),
+        0.000001,
+    )
     latencies = [
         (attempt.finished_at - attempt.created_at).total_seconds()
         for attempt in attempts
@@ -414,12 +493,15 @@ async def _result(
         pending_intervention_count=interventions or 0,
     )
     return BenchmarkResult(
-        benchmark_version=1,
+        benchmark_version=3,
         git_commit=_git_commit(),
         python_version=sys.version.split()[0],
         platform=platform.platform(),
-        started_at=started.isoformat(),
+        started_at=submission_started.isoformat(),
+        execution_started_at=execution_started.isoformat(),
         completed_at=completed.isoformat(),
+        submission_duration_seconds=submission_duration,
+        execution_duration_seconds=execution_duration,
         duration_seconds=duration,
         workload={
             "type": config.workload,
@@ -430,24 +512,71 @@ async def _result(
         configuration={
             "workers": config.workers,
             "worker_concurrency": config.worker_concurrency,
+            "effective_worker_loops": (
+                config.workers * config.worker_concurrency
+            ),
             "scheduler_ticks": ticks,
             "publisher_passes": passes,
             "max_queue_depth": depth,
+            "scheduler_total_seconds": scheduler_total_seconds,
+            "scheduler_avg_tick_seconds": (
+                scheduler_total_seconds / ticks if ticks else 0.0
+            ),
+            "publisher_total_seconds": publisher_total_seconds,
+            "publisher_avg_pass_seconds": (
+                publisher_total_seconds / passes if passes else 0.0
+            ),
+            "publisher_claim_seconds": publisher_claim_seconds,
+            "publisher_validity_check_seconds": publisher_validity_check_seconds,
+            "publisher_dispatch_seconds": publisher_dispatch_seconds,
+            "publisher_mark_published_seconds": publisher_mark_published_seconds,
+            "publisher_discard_seconds": publisher_discard_seconds,
+            "publisher_failure_record_seconds": publisher_failure_record_seconds,
         },
         results={
             "total_runs": len(runs),
             "total_task_executions": len(attempts),
-            "successful_executions": sum(a.status == "SUCCEEDED" for a in attempts),
-            "failed_executions": sum(a.status == "FAILED" for a in attempts),
-            "interrupted_executions": sum(a.status == "INTERRUPTED" for a in attempts),
-            "cancelled_executions": sum(a.status == "CANCELLED" for a in attempts),
+            "successful_executions": sum(
+                a.status == "SUCCEEDED" for a in attempts
+            ),
+            "failed_executions": sum(
+                a.status == "FAILED" for a in attempts
+            ),
+            "interrupted_executions": sum(
+                a.status == "INTERRUPTED" for a in attempts
+            ),
+            "cancelled_executions": sum(
+                a.status == "CANCELLED" for a in attempts
+            ),
             "tasks_per_second": len(attempts) / duration,
             "runs_per_second": len(runs) / duration,
+            "execution_tasks_per_second": (
+                len(attempts) / execution_duration
+            ),
+            "execution_runs_per_second": (
+                len(runs) / execution_duration
+            ),
             "scheduler_dispatches": dispatched,
-            "scheduler_dispatches_per_second": dispatched / duration,
+            "scheduler_dispatches_per_second": (
+                dispatched / execution_duration
+            ),
+            "scheduler_dispatches_per_scheduler_second": (
+                dispatched / scheduler_total_seconds
+                if scheduler_total_seconds > 0
+                else 0.0
+            ),
             "outbox_publications": published,
-            "outbox_publications_per_second": published / duration,
-            "worker_executions_per_second": len(attempts) / duration,
+            "outbox_publications_per_second": (
+                published / execution_duration
+            ),
+            "outbox_publications_per_publisher_second": (
+                published / publisher_total_seconds
+                if publisher_total_seconds > 0
+                else 0.0
+            ),
+            "worker_executions_per_second": (
+                len(attempts) / execution_duration
+            ),
             "latency_p50_seconds": percentile(latencies, 0.5) or 0,
             "latency_p95_seconds": percentile(latencies, 0.95) or 0,
             "latency_p99_seconds": percentile(latencies, 0.99) or 0,
@@ -455,6 +584,7 @@ async def _result(
         },
         correctness={"valid": not violations, "violations": violations},
     )
+
 
 
 def _git_commit() -> str | None:

@@ -22,6 +22,7 @@ def _parse(argv: list[str] | None) -> tuple[argparse.Namespace, BenchmarkConfig]
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
+
     try:
         config = BenchmarkConfig(
             workload=args.workload,
@@ -35,38 +36,75 @@ def _parse(argv: list[str] | None) -> tuple[argparse.Namespace, BenchmarkConfig]
         )
     except ValueError as exc:
         parser.error(str(exc))
+
     return args, config
 
 
 async def _run(config: BenchmarkConfig, output: Path | None) -> int:
     settings = get_settings()
     require_benchmark_database(settings.database_url)
+
     result = await run_benchmark(config, settings)
     payload = result.as_dict()
+
     print("Fluxion benchmark")
     print("-----------------")
     print(f"Workload: {config.workload}")
     print(f"Runs: {config.runs}")
     print(f"Task executions: {config.expected_executions}")
     print(f"Workers: {config.workers}")
-    print(f"Duration: {result.duration_seconds:.3f}s")
-    print(f"Throughput: {result.results['tasks_per_second']:.3f} tasks/s")
-    print(f"Correctness: {'PASS' if result.correctness['valid'] else 'INVALID'}")
+    print(f"Worker concurrency: {config.worker_concurrency}")
+    print(
+        "Effective worker loops: "
+        f"{config.workers * config.worker_concurrency}"
+    )
+    print(
+        f"Submission duration: "
+        f"{result.submission_duration_seconds:.3f}s"
+    )
+    print(
+        f"Execution duration: "
+        f"{result.execution_duration_seconds:.3f}s"
+    )
+    print(
+        f"Submission-to-completion duration: "
+        f"{result.duration_seconds:.3f}s"
+    )
+    print(
+        "Submission-to-completion throughput: "
+        f"{result.results['tasks_per_second']:.3f} tasks/s"
+    )
+    print(
+        "Execution throughput: "
+        f"{result.results['execution_tasks_per_second']:.3f} tasks/s"
+    )
+    print(
+        f"Correctness: "
+        f"{'PASS' if result.correctness['valid'] else 'INVALID'}"
+    )
+
     if output:
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+        output.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n"
+        )
+
     return 0 if result.correctness["valid"] else 1
 
 
 def main(argv: list[str] | None = None) -> int:
     args, config = _parse(argv)
+
     try:
         return asyncio.run(_run(config, args.output))
     except (TimeoutError, ValueError, RuntimeError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     except Exception:
-        print("Benchmark could not reach PostgreSQL or Redis.", file=sys.stderr)
+        print(
+            "Benchmark could not reach PostgreSQL or Redis.",
+            file=sys.stderr,
+        )
         return 1
 
 
