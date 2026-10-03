@@ -48,6 +48,13 @@ def test_environment_and_connection_configuration_are_validated() -> None:
         Settings(app_env="benchmark", database_url="postgresql+asyncpg://db/fluxion")
 
 
+def test_render_port_is_used_when_api_port_is_not_set(monkeypatch) -> None:
+    monkeypatch.delenv("API_PORT", raising=False)
+    monkeypatch.setenv("PORT", "10000")
+
+    assert Settings(_env_file=None).api_port == 10000
+
+
 def test_worker_lease_configuration_rejects_invalid_values() -> None:
     with pytest.raises(ValidationError):
         Settings(worker_lease_seconds=0)

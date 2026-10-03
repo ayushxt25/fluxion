@@ -2,7 +2,7 @@ from functools import lru_cache
 from typing import Literal
 from urllib.parse import urlparse
 
-from pydantic import ValidationError, model_validator
+from pydantic import AliasChoices, Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,7 +11,10 @@ class Settings(BaseSettings):
     app_env: Literal["development", "test", "benchmark", "production"] = "development"
     debug: bool = False
     api_host: str = "0.0.0.0"
-    api_port: int = 8000
+    api_port: int = Field(
+        default=8000,
+        validation_alias=AliasChoices("API_PORT", "PORT"),
+    )
     database_url: str = "postgresql+asyncpg://fluxion:fluxion@localhost:5432/fluxion"
     test_database_url: str | None = None
     redis_url: str = "redis://localhost:6379/0"
@@ -89,6 +92,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     @model_validator(mode="after")

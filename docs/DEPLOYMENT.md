@@ -115,6 +115,36 @@ token. Keep the demo-runtime service private, leave authentication and rate
 limits enabled, restrict PostgreSQL/Redis network access, and do not expose
 database, Redis, or task-upload controls through the frontend.
 
+## Render public demo deployment
+
+For the single-service Render free-tier demo, use the Docker image with this
+start command:
+
+```sh
+sh scripts/start_render_demo.sh
+```
+
+The wrapper runs `alembic upgrade head` before starting API, scheduler,
+publisher, worker, and reaper as separate child processes. It binds the API to
+`0.0.0.0` and uses Render's `PORT` unless `API_PORT` is explicitly set. Do not
+use this wrapper for a normal multi-service deployment.
+
+For Supabase, copy the **Session pooler** connection string from the project's
+**Connect** dialog. Keep port `5432` and the shared-pooler username format
+`postgres.<project-ref>`, replace only the password placeholder, and change
+the scheme to `postgresql+asyncpg`. Do not compose the pooler hostname from a
+region name: its `aws-<index>-<region>.pooler.supabase.com` index is assigned
+by Supabase. A stale or guessed index produces a DNS failure before Fluxion,
+SQLAlchemy, asyncpg, TLS, or credentials are involved.
+
+Set `sslmode=require` in the URL query string when the copied Supabase URL does
+not already include it (for example, append `?sslmode=require`). asyncpg accepts
+that URL option through SQLAlchemy; Fluxion does not add platform-specific SSL
+parameters or disable TLS. Use `sslmode=verify-full` only when the Supabase CA
+certificate is also mounted and referenced with `sslrootcert`. If the password
+has URL-reserved characters, percent-encode it before storing the URL in Render.
+Store the full URL only in Render's secret environment configuration.
+
 ## Health, readiness, and shutdown
 
 `/health` is process liveness only. `/ready` performs bounded PostgreSQL and
