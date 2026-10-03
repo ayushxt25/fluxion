@@ -40,7 +40,7 @@ from app.services.repositories import (
 )
 from app.services.scheduler import WorkflowScheduler
 from app.services.worker import TaskWorker
-from app.tasks.demo import DEMO_TASK_IDS, build_demo_workflow
+from app.tasks.demo import SMOKE_DEMO_TASK_IDS, build_demo_workflow
 
 
 async def reset_schema(engine) -> None:
@@ -58,7 +58,7 @@ async def load_attempts(session_factory, run_id):
     async with session_factory() as session:
         repository = TaskAttemptRepository(session)
         attempts = []
-        for task_id in DEMO_TASK_IDS:
+        for task_id in SMOKE_DEMO_TASK_IDS:
             attempts.extend(await repository.list_attempts(run_id, task_id))
         return tuple(attempts)
 
@@ -259,7 +259,7 @@ def test_demo_distributed_e2e_happy_path() -> None:
             assert final_run.status == WorkflowStatus.SUCCEEDED
             assert all(
                 final_run.get_task_status(task_id) == TaskStatus.SUCCEEDED
-                for task_id in DEMO_TASK_IDS
+                for task_id in SMOKE_DEMO_TASK_IDS
             )
             assert final_run.task_runs["demo.prepare"].result == {"value": 21}
             assert final_run.task_runs["demo.process"].result == {"value": 42}
@@ -274,7 +274,9 @@ def test_demo_distributed_e2e_happy_path() -> None:
                     "demo.finalize": 1,
                 }
             )
-            assert [attempt.task_id for attempt in attempts] == list(DEMO_TASK_IDS)
+            assert [attempt.task_id for attempt in attempts] == list(
+                SMOKE_DEMO_TASK_IDS
+            )
             assert all(
                 attempt.status == AttemptStatus.SUCCEEDED for attempt in attempts
             )

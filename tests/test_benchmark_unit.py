@@ -41,7 +41,10 @@ def test_percentiles_and_result_serialization_are_deterministic() -> None:
         python_version="3.11",
         platform="test",
         started_at="2026-10-02T00:00:00+00:00",
+        execution_started_at="2026-10-02T00:00:00.250000+00:00",
         completed_at="2026-10-02T00:00:01+00:00",
+        submission_duration_seconds=0.25,
+        execution_duration_seconds=0.75,
         duration_seconds=1,
         workload={
             "type": "single",

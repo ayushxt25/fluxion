@@ -6,10 +6,8 @@ from app.engine.context import TaskExecutionContext
 from app.schemas.workflow import WorkflowDefinition
 from app.sdk.workflow import WorkflowBuilder, dependency_result, literal, workflow_input
 
-DEMO_TASK_IDS = (
-    "demo.prepare",
-    "demo.process",
-    "demo.finalize",
+SMOKE_DEMO_TASK_IDS = ("demo.prepare", "demo.process", "demo.finalize")
+PORTFOLIO_DEMO_TASK_IDS = (
     "demo.ingest",
     "demo.validate",
     "demo.transform_a",
@@ -17,6 +15,7 @@ DEMO_TASK_IDS = (
     "demo.aggregate",
     "demo.publish",
 )
+DEMO_TASK_IDS = SMOKE_DEMO_TASK_IDS + PORTFOLIO_DEMO_TASK_IDS
 
 _PORTFOLIO_TASK_DELAY_SECONDS = 0.5
 
