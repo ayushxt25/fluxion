@@ -14,7 +14,8 @@ from app.tasks.demo import (
     DEMO_TASK_IDS,
     build_demo_tasks,
     build_demo_workflow,
-    build_portfolio_demo_workflow,
+    build_document_demo_workflow,
+    build_etl_demo_workflow,
     unique_demo_ids,
     unique_portfolio_demo_ids,
 )
@@ -108,76 +109,104 @@ def test_unique_demo_ids() -> None:
     assert first[1].startswith("demo-run-")
 
 
-def test_portfolio_demo_tasks_are_deterministic_and_aggregate_both_branches() -> None:
+def test_document_demo_tasks_are_deterministic_and_aggregate_both_branches() -> None:
     tasks = build_demo_tasks()
+    document = {
+        "id": "sample-document-001",
+        "title": "Fluxion Demonstration Document",
+        "author": "Fluxion",
+        "tags": ["demo"],
+        "body": "Fluxion executes durable workflows.",
+    }
 
     async def execute() -> tuple[dict[str, object], ...]:
-        ingested = await tasks["demo.ingest"](records=[3, 5, 8, 13])
-        validated = await tasks["demo.validate"](records=ingested["records"])
-        branch_a = await tasks["demo.transform_a"](
-            records=validated["records"], branch="a"
+        ingested = await tasks["demo.document.ingest"](document=document)
+        validated = await tasks["demo.document.validate"](
+            document=ingested["document"]
         )
-        branch_b = await tasks["demo.transform_b"](
-            records=validated["records"], branch="b"
+        text = await tasks["demo.document.extract_text"](
+            document=validated["document"]
         )
-        aggregate = await tasks["demo.aggregate"](
-            values_a=branch_a["values"], values_b=branch_b["values"]
+        metadata = await tasks["demo.document.extract_metadata"](
+            document=validated["document"]
         )
-        published = await tasks["demo.publish"](
-            combined=aggregate["combined"], branch_count=aggregate["branch_count"]
+        aggregate = await tasks["demo.document.aggregate"](
+            text=text["text"], metadata=metadata
         )
-        return ingested, validated, branch_a, branch_b, aggregate, published
+        summary = await tasks["demo.document.summarize"](
+            text=aggregate["text"], title=aggregate["metadata"]["title"]
+        )
+        persisted = await tasks["demo.document.persist"](summary=summary)
+        return ingested, validated, text, metadata, aggregate, persisted
 
-    ingested, validated, branch_a, branch_b, aggregate, published = asyncio.run(
+    ingested, validated, text, metadata, aggregate, persisted = asyncio.run(
         execute()
     )
 
-    assert ingested == {"records": [3, 5, 8, 13], "count": 4}
-    assert validated == {"records": [3, 5, 8, 13], "valid_count": 4}
-    assert branch_a == {"branch": "a", "values": [6, 10, 16, 26]}
-    assert branch_b == {"branch": "b", "values": [9, 15, 24, 39]}
-    assert aggregate == {
-        "combined": [6, 10, 16, 26, 9, 15, 24, 39],
-        "branch_count": 2,
-    }
-    assert published == {
-        "published": True,
-        "summary": {"record_count": 8, "branch_count": 2},
-    }
+    assert ingested["document_id"] == "sample-document-001"
+    assert validated["valid"] is True
+    assert text == {"text": "Fluxion executes durable workflows.", "word_count": 4}
+    assert metadata["author"] == "Fluxion"
+    assert aggregate["metadata"] == metadata
+    assert persisted["demo_persisted"] is True
 
 
-def test_portfolio_demo_workflow_has_real_fan_out_fan_in_mappings() -> None:
-    workflow = build_portfolio_demo_workflow("portfolio-workflow")
+def test_document_demo_workflow_has_real_fan_out_fan_in_mappings() -> None:
+    workflow = build_document_demo_workflow("document-workflow")
     tasks = {task.id: task for task in workflow.tasks}
 
     assert tuple(tasks) == (
-        "demo.ingest",
-        "demo.validate",
-        "demo.transform_a",
-        "demo.transform_b",
-        "demo.aggregate",
-        "demo.publish",
+        "demo.document.ingest",
+        "demo.document.validate",
+        "demo.document.extract_text",
+        "demo.document.extract_metadata",
+        "demo.document.aggregate",
+        "demo.document.summarize",
+        "demo.document.persist",
     )
-    assert tasks["demo.ingest"].depends_on == ()
-    assert tasks["demo.validate"].depends_on == ("demo.ingest",)
-    assert tasks["demo.transform_a"].depends_on == ("demo.validate",)
-    assert tasks["demo.transform_b"].depends_on == ("demo.validate",)
-    assert tasks["demo.aggregate"].depends_on == (
-        "demo.transform_a",
-        "demo.transform_b",
+    assert tasks["demo.document.extract_text"].depends_on == ("demo.document.validate",)
+    assert tasks["demo.document.extract_metadata"].depends_on == (
+        "demo.document.validate",
     )
-    assert tasks["demo.publish"].depends_on == ("demo.aggregate",)
-    assert tasks["demo.ingest"].parameters["records"].source == "workflow_input"
-    assert tasks["demo.aggregate"].parameters["values_a"].task_id == "demo.transform_a"
-    assert tasks["demo.aggregate"].parameters["values_b"].task_id == "demo.transform_b"
-    assert tasks["demo.publish"].parameters["combined"].task_id == "demo.aggregate"
+    assert tasks["demo.document.aggregate"].depends_on == (
+        "demo.document.extract_text", "demo.document.extract_metadata",
+    )
+    assert (
+        tasks["demo.document.ingest"].parameters["document"].source
+        == "workflow_input"
+    )
+
+
+def test_etl_demo_workflow_retries_validate_once() -> None:
+    workflow = build_etl_demo_workflow("etl-workflow")
+    tasks = {task.id: task for task in workflow.tasks}
+    assert tasks["demo.etl.clean"].depends_on == ("demo.etl.validate",)
+    assert tasks["demo.etl.features"].depends_on == ("demo.etl.validate",)
+    assert tasks["demo.etl.merge"].depends_on == ("demo.etl.clean", "demo.etl.features")
+    assert tasks["demo.etl.validate"].retry_policy.max_attempts == 2
+
+
+def test_etl_validate_fails_once_then_succeeds() -> None:
+    task = build_demo_tasks()["demo.etl.validate"]
+
+    async def execute() -> dict[str, object]:
+        first = TaskExecutionContext("wf", "run", "demo.etl.validate", 1, "a", "i")
+        with pytest.raises(RuntimeError, match="Simulated transient"):
+            await task(first, records=[{"id": 1, "value": 3}])
+        second = TaskExecutionContext("wf", "run", "demo.etl.validate", 2, "b", "i")
+        return await task(second, records=[{"id": 1, "value": 3}])
+
+    assert asyncio.run(execute()) == {
+        "records": [{"id": 1, "value": 3}],
+        "valid_count": 1,
+    }
 
 
 def test_unique_portfolio_demo_ids() -> None:
     workflow_id, run_id = unique_portfolio_demo_ids()
 
-    assert workflow_id.startswith("portfolio-demo-workflow-")
-    assert run_id.startswith("portfolio-demo-run-")
+    assert workflow_id.startswith("document-demo-workflow-")
+    assert run_id.startswith("document-demo-run-")
 
 
 def test_demo_cli_builds_existing_api_requests_and_stops_on_success() -> None:

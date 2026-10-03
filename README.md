@@ -260,27 +260,40 @@ returns `{"value": 21}`, `demo.process` receives that dependency result plus
 `multiplier` and returns `{"value": 42}`, and `demo.finalize` returns a final
 summary.
 
-### Portfolio DAG demo
+### Demo Playground
 
-For a visual fan-out/fan-in run in the dashboard, use the same distributed
-runtime path with `fluxion demo --portfolio`:
+The dashboard's **Demo Playground** starts only two server-defined workflows;
+it never accepts visitor-supplied task code or workflow JSON. Both use the real
+Fluxion scheduler, transactional outbox, Redis transport, and workers.
+
+**Document Processing Pipeline** validates a synthetic document, fans out to
+text and metadata extraction, aggregates both durable results, generates a
+summary, and records clearly-labelled demo persistence.
+
+**Resilient ETL Pipeline** fetches a synthetic dataset, deliberately fails its
+first schema-validation attempt with a simulated transient dependency error,
+then relies on Fluxion's normal durable retry for attempt two. It fans out to
+cleaning and feature computation before merging and demo persistence.
+
+For a local document-processing fan-out/fan-in run, use the same runtime path
+with `fluxion demo --portfolio`:
 
 ```bash
 fluxion demo --portfolio
 ```
 
-It submits `{"records": [3, 5, 8, 13]}` to this deterministic DAG:
+It submits a deterministic synthetic document to this DAG:
 
 ```text
-demo.ingest -> demo.validate -> demo.transform_a --+
-                             -> demo.transform_b --+-> demo.aggregate -> demo.publish
+demo.document.ingest -> demo.document.validate -> demo.document.extract_text -----+
+                                               -> demo.document.extract_metadata -+-> demo.document.aggregate -> demo.document.summarize -> demo.document.persist
 ```
 
-The transform tasks run as independent branches after validation. Aggregate
-unlocks only after both have completed, and publish receives the durable
-aggregate result. Each task has a small fixed nonblocking delay so its real
-state transitions are observable through the dashboard SSE view. These tasks
-have no external side effects and are intended only for local demonstration.
+The extraction tasks run as independent branches after validation. Aggregate
+unlocks only after both complete. Each task has a small fixed nonblocking delay
+so its real state transitions are observable through the dashboard SSE view.
+The demo tasks have no external side effects and are intended only for public
+demonstration.
 
 ## Task Results
 

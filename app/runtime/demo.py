@@ -14,12 +14,20 @@ from app.tasks.demo import (
     build_demo_workflow,
     build_portfolio_demo_workflow,
     unique_demo_ids,
-    unique_portfolio_demo_ids,
+    unique_document_demo_ids,
 )
 
 TERMINAL_STATUSES = {"SUCCEEDED", "FAILED", "CANCELLED"}
 SMOKE_DEMO_INPUT = {"seed": 21, "multiplier": 2}
-PORTFOLIO_DEMO_INPUT = {"records": [3, 5, 8, 13]}
+PORTFOLIO_DEMO_INPUT = {
+    "document": {
+        "id": "sample-document-001",
+        "title": "Fluxion Demonstration Document",
+        "author": "Fluxion",
+        "tags": ["demo", "workflow"],
+        "body": "Fluxion executes durable workflows through a real distributed stack.",
+    }
+}
 
 
 class DemoError(RuntimeError):
@@ -179,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
     workflow_factory = (
         build_portfolio_demo_workflow if args.portfolio else build_demo_workflow
     )
-    id_factory = unique_portfolio_demo_ids if args.portfolio else unique_demo_ids
+    id_factory = unique_document_demo_ids if args.portfolio else unique_demo_ids
     workflow_input = PORTFOLIO_DEMO_INPUT if args.portfolio else SMOKE_DEMO_INPUT
     try:
         run_demo(

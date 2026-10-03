@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const links = [{ href: "/", label: "Dashboard" }, { href: "/workflows", label: "Workflows" }, { href: "/runs", label: "Runs" }];
+const links = [{ href: "/", label: "Dashboard" }, { href: "/workflows", label: "Workflows" }, { href: "/runs", label: "Runs" }, { href: "/playground", label: "Demo Playground" }];
 
 export function Sidebar() {
   const pathname = usePathname();
