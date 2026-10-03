@@ -4,6 +4,10 @@ set -u
 
 export API_HOST="${API_HOST:-0.0.0.0}"
 export API_PORT="${API_PORT:-${PORT:-8000}}"
+# One free-tier container runs five independent roles; bound each client pool.
+export DATABASE_POOL_SIZE="${DATABASE_POOL_SIZE:-2}"
+export DATABASE_MAX_OVERFLOW="${DATABASE_MAX_OVERFLOW:-0}"
+export DATABASE_POOL_TIMEOUT_SECONDS="${DATABASE_POOL_TIMEOUT_SECONDS:-10}"
 
 children=""
 stopping=0

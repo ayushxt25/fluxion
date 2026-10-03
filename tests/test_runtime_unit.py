@@ -84,7 +84,7 @@ def test_runtime_bootstrap_creates_and_closes_resources(monkeypatch) -> None:
     dispatcher = FakeRedisResource()
     limiter = FakeRedisResource()
 
-    monkeypatch.setattr(bootstrap, "create_async_engine", lambda url: engine)
+    monkeypatch.setattr(bootstrap, "create_database_engine", lambda _: engine)
     monkeypatch.setattr(bootstrap, "RedisTaskDispatcher", lambda *args: dispatcher)
     monkeypatch.setattr(bootstrap, "RedisRateLimiter", lambda *args: limiter)
 

@@ -47,6 +47,14 @@ def test_environment_and_connection_configuration_are_validated() -> None:
     with pytest.raises(ValidationError):
         Settings(app_env="benchmark", database_url="postgresql+asyncpg://db/fluxion")
 
+    for values in (
+        {"database_pool_size": 0},
+        {"database_max_overflow": -1},
+        {"database_pool_timeout_seconds": 0},
+    ):
+        with pytest.raises(ValidationError):
+            Settings(**values)
+
 
 def test_render_port_is_used_when_api_port_is_not_set(monkeypatch) -> None:
     monkeypatch.delenv("API_PORT", raising=False)

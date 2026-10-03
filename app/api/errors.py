@@ -39,6 +39,11 @@ from app.security.auth import (
 )
 
 logger = logging.getLogger(__name__)
+_URL_CREDENTIALS = re.compile(r"([a-z][a-z0-9+.-]*://)[^\s@]+@", re.IGNORECASE)
+_SECRET_ASSIGNMENT = re.compile(
+    r"\b(password|secret|token|authorization)=\S+",
+    re.IGNORECASE,
+)
 
 
 def install_api_handlers(app: FastAPI) -> None:
@@ -62,6 +67,7 @@ def install_api_handlers(app: FastAPI) -> None:
     app.add_exception_handler(AuthorizationError, authorization_handler)
     app.add_exception_handler(RateLimitExceededError, rate_limit_handler)
     app.add_exception_handler(RateLimitUnavailableError, unavailable_handler)
+    app.add_exception_handler(Exception, unexpected_error_handler)
 
 
 async def request_id_middleware(
@@ -145,6 +151,37 @@ async def rate_limit_handler(
     response.headers["X-RateLimit-Limit"] = str(exc.limit)
     response.headers["X-RateLimit-Remaining"] = str(exc.remaining)
     return response
+
+
+async def unexpected_error_handler(
+    request: Request,
+    exc: Exception,
+) -> JSONResponse:
+    sanitized_error = RuntimeError(_sanitize_exception_message(str(exc)))
+    logger.error(
+        "Unhandled API exception.",
+        exc_info=(RuntimeError, sanitized_error, exc.__traceback__),
+        extra={
+            "event": "api.unhandled_exception",
+            "request_id": getattr(request.state, "request_id", None),
+            "method": request.method,
+            "path": _route_template(request),
+        },
+    )
+
+
+def _sanitize_exception_message(message: str) -> str:
+    message = _URL_CREDENTIALS.sub(r"\1<redacted>@", message)
+    return _SECRET_ASSIGNMENT.sub(r"\1=<redacted>", message)
+    return JSONResponse(
+        status_code=HTTPStatus.INTERNAL_SERVER_ERROR.value,
+        content={
+            "error": {
+                "code": "internal_server_error",
+                "message": "An unexpected server error occurred.",
+            }
+        },
+    )
 
 
 def _error_response(status: HTTPStatus, exc: Exception) -> JSONResponse:

@@ -129,6 +129,12 @@ publisher, worker, and reaper as separate child processes. It binds the API to
 `0.0.0.0` and uses Render's `PORT` unless `API_PORT` is explicitly set. Do not
 use this wrapper for a normal multi-service deployment.
 
+The wrapper also defaults each role to a bounded SQLAlchemy client pool
+(`DATABASE_POOL_SIZE=2`, `DATABASE_MAX_OVERFLOW=0`,
+`DATABASE_POOL_TIMEOUT_SECONDS=10`) and enables connection pre-ping. These are
+conservative starting values for one tiny Render instance sharing a Supabase
+Session Pooler; tune them only after observing pooler limits and request load.
+
 For Supabase, copy the **Session pooler** connection string from the project's
 **Connect** dialog. Keep port `5432` and the shared-pooler username format
 `postgres.<project-ref>`, replace only the password placeholder, and change

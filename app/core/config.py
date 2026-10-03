@@ -16,6 +16,9 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("API_PORT", "PORT"),
     )
     database_url: str = "postgresql+asyncpg://fluxion:fluxion@localhost:5432/fluxion"
+    database_pool_size: int = 5
+    database_max_overflow: int = 10
+    database_pool_timeout_seconds: float = 30
     test_database_url: str | None = None
     redis_url: str = "redis://localhost:6379/0"
     dispatch_queue_name: str = "fluxion:dispatch"
@@ -105,6 +108,12 @@ class Settings(BaseSettings):
             raise ValueError("REDIS_URL must use redis or rediss.")
         if not database.path or database.path == "/":
             raise ValueError("DATABASE_URL must include a database name.")
+        if self.database_pool_size < 1:
+            raise ValueError("DATABASE_POOL_SIZE must be at least 1.")
+        if self.database_max_overflow < 0:
+            raise ValueError("DATABASE_MAX_OVERFLOW must not be negative.")
+        if self.database_pool_timeout_seconds <= 0:
+            raise ValueError("DATABASE_POOL_TIMEOUT_SECONDS must be positive.")
         if not redis.hostname:
             raise ValueError("REDIS_URL must include a host.")
         if self.worker_lease_seconds <= 0:

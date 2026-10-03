@@ -7,9 +7,10 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings, get_settings
+from app.db.engine import create_database_engine
 from app.dispatch.transport import RedisTaskDispatcher
 from app.observability.logging import configure_logging
 from app.runtime.preflight import preflight
@@ -45,7 +46,7 @@ async def runtime_resources(
 ) -> AsyncIterator[RuntimeResources]:
     settings = settings or get_settings()
     configure_logging(settings.log_level, settings.log_format)
-    engine = create_async_engine(settings.database_url)
+    engine = create_database_engine(settings)
     resources = RuntimeResources(
         settings=settings,
         session_factory=async_sessionmaker(
