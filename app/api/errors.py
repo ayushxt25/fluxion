@@ -168,11 +168,6 @@ async def unexpected_error_handler(
             "path": _route_template(request),
         },
     )
-
-
-def _sanitize_exception_message(message: str) -> str:
-    message = _URL_CREDENTIALS.sub(r"\1<redacted>@", message)
-    return _SECRET_ASSIGNMENT.sub(r"\1=<redacted>", message)
     return JSONResponse(
         status_code=HTTPStatus.INTERNAL_SERVER_ERROR.value,
         content={
@@ -182,6 +177,11 @@ def _sanitize_exception_message(message: str) -> str:
             }
         },
     )
+
+
+def _sanitize_exception_message(message: str) -> str:
+    message = _URL_CREDENTIALS.sub(r"\1<redacted>@", message)
+    return _SECRET_ASSIGNMENT.sub(r"\1=<redacted>", message)
 
 
 def _error_response(status: HTTPStatus, exc: Exception) -> JSONResponse:
