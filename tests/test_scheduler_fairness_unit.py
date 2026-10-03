@@ -11,18 +11,28 @@ from app.services.scheduler import WorkflowScheduler
 @dataclass(frozen=True)
 class _RunRef:
     run_id: str
+    workflow_id: str = "workflow"
+    workflow_revision: int = 1
 
 
 class _LoopRunRepository:
-    async def list_incomplete(self):
+    async def list_schedulable(self, *, limit: int):
+        assert limit == 3
         return (_RunRef("run-a"), _RunRef("run-b"), _RunRef("run-c"))
 
 
 class _FairScheduler:
     def __init__(self) -> None:
         self.calls: list[tuple[str, int | None]] = []
+        self.workflow_loads: list[tuple[str, int]] = []
 
-    async def dispatch_ready(self, run_id: str, *, max_dispatch: int | None = None):
+    async def get_workflow_revision(self, workflow_id: str, revision: int):
+        self.workflow_loads.append((workflow_id, revision))
+        return (workflow_id, revision)
+
+    async def dispatch_ready_preloaded(
+        self, run_id: str, *, max_dispatch=None, **kwargs
+    ):
         self.calls.append((run_id, max_dispatch))
         count = min(2, max_dispatch or 0)
         return type(
@@ -45,11 +55,12 @@ def test_scheduler_loop_caps_global_work_and_visits_runs_in_order() -> None:
             poll_seconds=0.01,
             max_dispatch_per_tick=3,
         ).tick()
-        return scheduler.calls, result
+        return scheduler.calls, scheduler.workflow_loads, result
 
-    calls, result = asyncio.run(scenario())
+    calls, workflow_loads, result = asyncio.run(scenario())
 
     assert calls == [("run-a", 3), ("run-b", 1)]
+    assert workflow_loads == [("workflow", 1)]
     assert sum(len(summary.dispatched_task_ids) for summary in result.scheduled) == 3
 
 

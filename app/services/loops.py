@@ -59,12 +59,25 @@ class SchedulerLoop:
     async def tick(self) -> SchedulerTickResult:
         scheduled = []
         remaining = self._max_dispatch_per_tick
-        for run_ref in await self._run_repository.list_incomplete():
+        workflow_cache = {}
+        for run_ref in await self._run_repository.list_schedulable(
+            limit=self._max_dispatch_per_tick
+        ):
             if remaining <= 0:
                 break
             try:
-                summary = await self._scheduler.dispatch_ready(
+                workflow_key = (run_ref.workflow_id, run_ref.workflow_revision)
+                workflow = workflow_cache.get(workflow_key)
+                if workflow is None:
+                    workflow = await self._scheduler.get_workflow_revision(
+                        *workflow_key
+                    )
+                    workflow_cache[workflow_key] = workflow
+                summary = await self._scheduler.dispatch_ready_preloaded(
                     run_ref.run_id,
+                    workflow_id=run_ref.workflow_id,
+                    workflow_revision=run_ref.workflow_revision,
+                    workflow=workflow,
                     max_dispatch=remaining,
                 )
             except (DispatchError, PersistenceError):

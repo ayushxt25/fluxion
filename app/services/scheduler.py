@@ -12,6 +12,7 @@ from app.observability.metrics import (
     record_scheduler_backpressure,
     record_task_dispatches,
 )
+from app.schemas.workflow import WorkflowDefinition
 from app.services.repositories import (
     DispatchOutboxRepository,
     TaskAttemptRepository,
@@ -75,18 +76,45 @@ class WorkflowScheduler:
         max_concurrency: int | None = None,
         max_dispatch: int | None = None,
     ) -> DispatchSummary:
+        workflow_id, workflow_revision = (
+            await self._run_repository.get_workflow_reference(run_id)
+        )
+        workflow = await self.get_workflow_revision(workflow_id, workflow_revision)
+        return await self.dispatch_ready_preloaded(
+            run_id,
+            workflow_id=workflow_id,
+            workflow_revision=workflow_revision,
+            workflow=workflow,
+            max_concurrency=max_concurrency,
+            max_dispatch=max_dispatch,
+        )
+
+    async def get_workflow_revision(
+        self,
+        workflow_id: str,
+        workflow_revision: int,
+    ) -> WorkflowDefinition:
+        """Load an immutable definition for bounded reuse within one scheduler tick."""
+        return await self._workflow_repository.get_revision(
+            workflow_id, workflow_revision
+        )
+
+    async def dispatch_ready_preloaded(
+        self,
+        run_id: str,
+        *,
+        workflow_id: str,
+        workflow_revision: int,
+        workflow: WorkflowDefinition,
+        max_concurrency: int | None = None,
+        max_dispatch: int | None = None,
+    ) -> DispatchSummary:
+        """Dispatch using the immutable workflow reference selected by this tick."""
         if max_concurrency is not None and max_concurrency <= 0:
             raise InvalidConcurrencyLimitError(max_concurrency)
         if max_dispatch is not None and max_dispatch <= 0:
             raise InvalidConcurrencyLimitError(max_dispatch)
 
-        (
-            workflow_id,
-            workflow_revision,
-        ) = await self._run_repository.get_workflow_reference(run_id)
-        workflow = await self._workflow_repository.get_revision(
-            workflow_id, workflow_revision
-        )
         workflow_run = await self._run_repository.get(run_id, workflow)
         await self._promote_due_retries(workflow_run)
 

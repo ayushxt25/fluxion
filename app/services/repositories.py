@@ -617,6 +617,44 @@ class WorkflowRunRepository:
                 for record in result.scalars()
             )
 
+    async def list_schedulable(
+        self,
+        *,
+        limit: int,
+    ) -> tuple[IncompleteWorkflowRunRef, ...]:
+        """Return a bounded, ordered set of runs with work the scheduler may act on."""
+        if limit < 1:
+            raise ValueError("limit must be positive.")
+        now = datetime.now(UTC)
+        async with self._session.begin():
+            result = await self._session.execute(
+                select(WorkflowRunRecord)
+                .join(TaskRunRecord, TaskRunRecord.run_id == WorkflowRunRecord.run_id)
+                .where(
+                    WorkflowRunRecord.status.in_(
+                        (WorkflowStatus.PENDING.value, WorkflowStatus.RUNNING.value)
+                    ),
+                    (
+                        (TaskRunRecord.status == TaskStatus.READY.value)
+                        | (
+                            (TaskRunRecord.status == TaskStatus.RETRY_WAITING.value)
+                            & (TaskRunRecord.next_retry_at <= now)
+                        )
+                    ),
+                )
+                .distinct()
+                .order_by(WorkflowRunRecord.run_id)
+                .limit(limit)
+            )
+            return tuple(
+                IncompleteWorkflowRunRef(
+                    run_id=record.run_id,
+                    workflow_id=record.workflow_id,
+                    workflow_revision=record.workflow_revision,
+                )
+                for record in result.scalars()
+            )
+
     async def get_workflow_id(self, run_id: str) -> str:
         async with self._session.begin():
             result = await self._session.execute(

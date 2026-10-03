@@ -12,7 +12,12 @@ class FakeScheduler:
     def __init__(self) -> None:
         self.calls = []
 
-    async def dispatch_ready(self, run_id: str, *, max_dispatch: int | None = None):
+    async def get_workflow_revision(self, workflow_id: str, revision: int):
+        return (workflow_id, revision)
+
+    async def dispatch_ready_preloaded(
+        self, run_id: str, *, max_dispatch=None, **kwargs
+    ):
         self.calls.append((run_id, max_dispatch))
 
         class Summary:
@@ -22,8 +27,15 @@ class FakeScheduler:
 
 
 class FakeRunRepository:
-    async def list_incomplete(self):
-        return (type("RunRef", (), {"run_id": "run-1"})(),)
+    async def list_schedulable(self, *, limit: int):
+        assert limit == 100
+        return (
+            type(
+                "RunRef",
+                (),
+                {"run_id": "run-1", "workflow_id": "workflow", "workflow_revision": 1},
+            )(),
+        )
 
 
 class FakePublisher:
