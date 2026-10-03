@@ -53,9 +53,9 @@ def main() -> None:
         "webhook": webhooks.main,
         "retention": retention.main,
         "schedule-runner": schedule_runner.main,
-        "demo": demo.cli,
+        "demo": lambda: demo.cli(remaining),
         "benchmark": lambda: benchmark.cli(remaining),
     }
-    if remaining and args.command != "benchmark":
+    if remaining and args.command not in {"benchmark", "demo"}:
         parser.error("unrecognized arguments: " + " ".join(remaining))
     runtimes[args.command]()

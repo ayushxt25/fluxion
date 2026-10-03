@@ -8,7 +8,7 @@ import pytest
 from app import cli
 from app.core.config import Settings
 from app.engine.registry import TaskRegistry
-from app.runtime import bootstrap, coordinator, preflight, retention
+from app.runtime import bootstrap, coordinator, demo, preflight, retention
 from app.tasks.registry import build_task_registry
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +43,16 @@ def test_grouped_cli_registers_coordinator(monkeypatch) -> None:
     cli.main()
 
     assert called == [True]
+
+
+def test_grouped_cli_forwards_demo_arguments(monkeypatch) -> None:
+    forwarded: list[list[str] | None] = []
+    monkeypatch.setattr("sys.argv", ["fluxion", "demo", "--portfolio"])
+    monkeypatch.setattr(demo, "cli", lambda argv=None: forwarded.append(argv))
+
+    cli.main()
+
+    assert forwarded == [["--portfolio"]]
 
 
 def test_task_registry_hook_builds_registry_once_per_call() -> None:

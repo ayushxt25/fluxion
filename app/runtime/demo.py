@@ -9,9 +9,17 @@ from urllib.error import HTTPError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
-from app.tasks.demo import build_demo_workflow, unique_demo_ids
+from app.schemas.workflow import WorkflowDefinition
+from app.tasks.demo import (
+    build_demo_workflow,
+    build_portfolio_demo_workflow,
+    unique_demo_ids,
+    unique_portfolio_demo_ids,
+)
 
 TERMINAL_STATUSES = {"SUCCEEDED", "FAILED", "CANCELLED"}
+SMOKE_DEMO_INPUT = {"seed": 21, "multiplier": 2}
+PORTFOLIO_DEMO_INPUT = {"records": [3, 5, 8, 13]}
 
 
 class DemoError(RuntimeError):
@@ -79,12 +87,14 @@ def run_demo(
     options: DemoOptions,
     *,
     id_factory: Callable[[], tuple[str, str]] = unique_demo_ids,
+    workflow_factory: Callable[[str], WorkflowDefinition] = build_demo_workflow,
+    workflow_input: dict[str, Any] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
     output: Callable[[str], None] = print,
 ) -> DemoResult:
     workflow_id, run_id = id_factory()
-    workflow = build_demo_workflow(workflow_id).model_dump(
+    workflow = workflow_factory(workflow_id).model_dump(
         mode="json",
         exclude_defaults=True,
     )
@@ -94,12 +104,16 @@ def run_demo(
     client.request_json(
         "POST",
         f"/api/v1/workflows/{workflow_id}/runs",
-        {"run_id": run_id, "input": {"seed": 21, "multiplier": 2}},
+        {
+            "run_id": run_id,
+            "input": workflow_input if workflow_input is not None else SMOKE_DEMO_INPUT,
+        },
     )
     output(f"Created run: {run_id}")
 
     deadline = monotonic() + options.timeout_seconds
     last_status = None
+    last_task_statuses: dict[str, str] = {}
     while monotonic() < deadline:
         run = client.request_json("GET", f"/api/v1/runs/{run_id}")
         status = run["status"]
@@ -107,8 +121,19 @@ def run_demo(
             output(f"Run status: {status}")
             last_status = status
         for task in run.get("tasks", ()):
-            output(f"{task['task_id']}: {task['status']}")
+            task_id = task["task_id"]
+            task_status = task["status"]
+            if last_task_statuses.get(task_id) != task_status:
+                output(f"{task_id}: {task_status}")
+                last_task_statuses[task_id] = task_status
         if status == "SUCCEEDED":
+            results = {
+                task["task_id"]: task["result"]
+                for task in run.get("tasks", ())
+                if task.get("has_result")
+            }
+            if results:
+                output(f"Task results: {json.dumps(results, sort_keys=True)}")
             output("Workflow: SUCCEEDED")
             return DemoResult(workflow_id=workflow_id, run_id=run_id, status=status)
         if status in TERMINAL_STATUSES:
@@ -131,6 +156,11 @@ def _options_from_args(
     parser.add_argument("--token", default=settings.fluxion_api_token)
     parser.add_argument("--timeout", type=float, default=settings.demo_timeout_seconds)
     parser.add_argument("--poll", type=float, default=settings.demo_poll_seconds)
+    parser.add_argument(
+        "--portfolio",
+        action="store_true",
+        help="Run the six-task fan-out/fan-in dashboard demonstration.",
+    )
     args = parser.parse_args(argv)
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
@@ -145,9 +175,20 @@ def _options_from_args(
 
 
 def main(argv: list[str] | None = None) -> int:
-    _, options = _options_from_args(argv)
+    args, options = _options_from_args(argv)
+    workflow_factory = (
+        build_portfolio_demo_workflow if args.portfolio else build_demo_workflow
+    )
+    id_factory = unique_portfolio_demo_ids if args.portfolio else unique_demo_ids
+    workflow_input = PORTFOLIO_DEMO_INPUT if args.portfolio else SMOKE_DEMO_INPUT
     try:
-        run_demo(UrlLibApiClient(options.api_url, options.token), options)
+        run_demo(
+            UrlLibApiClient(options.api_url, options.token),
+            options,
+            id_factory=id_factory,
+            workflow_factory=workflow_factory,
+            workflow_input=workflow_input,
+        )
     except DemoError as exc:
         print(str(exc), file=sys.stderr)
         return 1

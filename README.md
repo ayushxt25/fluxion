@@ -209,9 +209,9 @@ does not label metrics by run ID, workflow ID, task ID, request ID, or user.
 
 Worker task implementations are not uploaded through the API. Deployments
 register task callables by editing the application-side hook:
-`app.tasks.registry.build_task_registry()`. The default hook registers only the
-safe built-in demo tasks `demo.prepare`, `demo.process`, and `demo.finalize` so
-local smoke tests can run without arbitrary code upload.
+`app.tasks.registry.build_task_registry()`. The default hook registers safe
+built-in smoke and portfolio-demo tasks so local demonstrations can run without
+arbitrary code upload.
 
 ## Demo Smoke Test
 
@@ -259,6 +259,28 @@ business logic. The demo run supplies workflow input `{"seed": 21,
 returns `{"value": 21}`, `demo.process` receives that dependency result plus
 `multiplier` and returns `{"value": 42}`, and `demo.finalize` returns a final
 summary.
+
+### Portfolio DAG demo
+
+For a visual fan-out/fan-in run in the dashboard, use the same distributed
+runtime path with `fluxion demo --portfolio`:
+
+```bash
+fluxion demo --portfolio
+```
+
+It submits `{"records": [3, 5, 8, 13]}` to this deterministic DAG:
+
+```text
+demo.ingest -> demo.validate -> demo.transform_a --+
+                             -> demo.transform_b --+-> demo.aggregate -> demo.publish
+```
+
+The transform tasks run as independent branches after validation. Aggregate
+unlocks only after both have completed, and publish receives the durable
+aggregate result. Each task has a small fixed nonblocking delay so its real
+state transitions are observable through the dashboard SSE view. These tasks
+have no external side effects and are intended only for local demonstration.
 
 ## Task Results
 
