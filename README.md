@@ -23,9 +23,6 @@ retried, duplicated, interrupted, or recovered.
 
 ![Fluxion dashboard](docs/assets/dashboard.png)
 
-_The live dashboard is a read-only control-plane view over durable workflow
-state; counts and recent runs come from the deployed service, not mock data._
-
 ## Why Fluxion
 
 - **Durable execution path:** workflow and task state live in PostgreSQL; a
@@ -44,9 +41,10 @@ state; counts and recent runs come from the deployed service, not mock data._
 ## Live demo
 
 [![Frontend](https://img.shields.io/badge/Frontend-Live-22c7df?style=flat-square)](https://fluxion-m5h1l4q1e-valerian1.vercel.app/)
+
 [![Backend](https://img.shields.io/badge/Backend-Live-2f855a?style=flat-square)](https://fluxion-c153.onrender.com)
 
-The public portfolio deployment runs a Next.js dashboard on Vercel, a Render
+The public deployment runs a Next.js dashboard on Vercel, a Render
 Free backend, managed PostgreSQL, and Redis. To fit free-tier limits, the
 public-demo container co-locates the API, scheduler, publisher, worker, and
 reaper. **That is a hosting constraint, not Fluxion's normal topology:** these
@@ -65,6 +63,9 @@ workflows; it does not accept arbitrary workflow JSON or user code:
 The Playground's server route accepts only these predefined identifiers. It
 does not accept arbitrary workflow definitions, task code, or browser-exposed
 control-plane credentials.
+
+_The live dashboard is a read-only control-plane view over durable workflow
+state; counts and recent runs come from the deployed service, not mock data._
 
 ## Architecture
 
