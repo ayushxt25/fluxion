@@ -14,9 +14,6 @@ carries dispatch messages to independently deployable workers. It is a
 system designed around the correctness boundaries that matter when work can be
 retried, duplicated, interrupted, or recovered.
 
-[![Frontend](https://img.shields.io/badge/Frontend-Live-22c7df?style=flat-square)](https://fluxion-m5h1l4q1e-valerian1.vercel.app/)
-[![Backend](https://img.shields.io/badge/Backend-Live-2f855a?style=flat-square)](https://fluxion-c153.onrender.com)
-
 **Explore:**
 [architecture](docs/ARCHITECTURE.md) ·
 [benchmarks](docs/BENCHMARK_RESULTS.md) ·
@@ -45,6 +42,9 @@ state; counts and recent runs come from the deployed service, not mock data._
   part of the repository—not mocked around the core path.
 
 ## Live demo
+
+[![Frontend](https://img.shields.io/badge/Frontend-Live-22c7df?style=flat-square)](https://fluxion-m5h1l4q1e-valerian1.vercel.app/)
+[![Backend](https://img.shields.io/badge/Backend-Live-2f855a?style=flat-square)](https://fluxion-c153.onrender.com)
 
 The public portfolio deployment runs a Next.js dashboard on Vercel, a Render
 Free backend, managed PostgreSQL, and Redis. To fit free-tier limits, the
