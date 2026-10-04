@@ -7,8 +7,8 @@ messages only.
 
 ```mermaid
 flowchart LR
-    C[Client / Python SDK] --> API[FastAPI control plane]
-    API --> PG[(PostgreSQL canonical state)]
+    C[Dashboard / Client / Python SDK] --> API[FastAPI control plane]
+    API --> PG[(PostgreSQL<br/>canonical state)]
     S[Scheduler] --> PG
     PG --> O[Transactional dispatch outbox]
     O --> P[Publisher]
@@ -23,6 +23,8 @@ flowchart LR
     TR[Event triggers] --> PG
     PG --> WH[Webhook runtime]
     RET[Retention runtime] --> PG
+    PG --> SSE[SSE run events]
+    PG --> OBS[Audit, metrics, and structured logs]
 ```
 
 ## Execution semantics

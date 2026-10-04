@@ -53,10 +53,12 @@ orchestrator. It runs a one-shot migration service before application roles and
 uses restart policies for long-running roles. Start it with a strong
 `JWT_SECRET`; scale workers with `docker compose up --scale worker=4`.
 
-## Northflank Sandbox portfolio deployment
+## Northflank Sandbox alternative topology
 
-For a free-tier public portfolio deployment, use two Northflank services backed
-by the PostgreSQL addon and an external Upstash Redis instance:
+This is an alternative two-service Sandbox topology retained for operators who
+use Northflank. It is **not** the current public portfolio deployment; see the
+Render section below for that constrained demo topology. It uses two Northflank
+services backed by the PostgreSQL addon and an external Upstash Redis instance:
 
 | Location | Role | Command / exposure |
 | --- | --- | --- |

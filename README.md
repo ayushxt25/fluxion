@@ -1,39 +1,178 @@
 # Fluxion
 
 [![CI](https://github.com/ayushxt25/fluxion/actions/workflows/ci.yml/badge.svg)](https://github.com/ayushxt25/fluxion/actions/workflows/ci.yml)
-Python 3.11+
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Release 1.0.0](https://img.shields.io/github/v/tag/ayushxt25/fluxion?label=release)](https://github.com/ayushxt25/fluxion/tree/v1.0.0)
 
-Fluxion is a PostgreSQL-backed distributed workflow engine for DAG-based
-workflows. It uses a transactional dispatch outbox with Redis transport,
-worker leases and fencing, durable retries, immutable workflow revisions,
-run-coordinator fencing, and explicit operator resolution for ambiguous work.
-The REST control plane, SDK, operational runtimes, metrics, and Compose topology
-support a production-style multi-process deployment.
+> A PostgreSQL-backed distributed DAG workflow execution engine with durable
+> state, transactional dispatch, worker coordination, and at-least-once
+> execution semantics.
 
-Fluxion remains at-least-once infrastructure: external side effects require
-task-level idempotency, and interrupted work is never retried automatically.
-See [deployment guidance](docs/DEPLOYMENT.md) for required production
-configuration, migration order, probes, scaling, and operational limitations.
+Fluxion separates canonical execution state from delivery transport: PostgreSQL
+stores workflow state, attempts, results, leases, and outbox intent; Redis
+carries dispatch messages to independently deployable workers. It is a
+portfolio project focused on the system-design boundaries that matter when work
+can be retried, duplicated, interrupted, or recovered.
 
-## Portfolio summary
+[![Frontend](https://img.shields.io/badge/Frontend-Live-22c7df?style=flat-square)](https://fluxion-m5h1l4q1e-valerian1.vercel.app/)
+[![Backend](https://img.shields.io/badge/Backend-Live-2f855a?style=flat-square)](https://fluxion-c153.onrender.com)
 
-Fluxion is a PostgreSQL-backed distributed DAG execution engine with durable
-scheduling, transactional-outbox dispatch, Redis worker transport, fenced
-leases, retry and recovery controls, operator resolution of ambiguous
-execution, and reproducible end-to-end benchmarking.
+**Explore:**
+[architecture](docs/ARCHITECTURE.md) ·
+[benchmarks](docs/BENCHMARK_RESULTS.md) ·
+[deployment](docs/DEPLOYMENT.md) ·
+[release notes](docs/RELEASE_1_0.md) ·
+[documentation index](docs/README.md)
+
+![Fluxion dashboard](docs/assets/dashboard.png)
+
+_The live dashboard is a read-only control-plane view over durable workflow
+state; counts and recent runs come from the deployed service, not mock data._
+
+## Why Fluxion
+
+- **Durable execution path:** workflow and task state live in PostgreSQL; a
+  transactional outbox closes the database-to-broker dispatch gap.
+- **Explicit delivery semantics:** Redis is transport only. Delivery and
+  execution are at least once, so duplicate handling is a deliberate design
+  concern rather than an implicit promise.
+- **Safe ownership recovery:** worker and coordinator leases use fencing to
+  reject stale owners. Ambiguous work is held for an explicit operator decision.
+- **Reproducible workflow definitions:** runs are pinned to immutable workflow
+  revisions and task parameter mappings are validated before execution.
+- **Operational depth:** retries, reconciliation, cancellation, retention,
+  RBAC/audit, SSE events, preflight checks, chaos tests, and benchmarks are all
+  part of the repository—not mocked around the core path.
+
+## Live demo
+
+The public portfolio deployment runs a Next.js dashboard on Vercel, a Render
+Free backend, managed PostgreSQL, and Redis. To fit free-tier limits, the
+public-demo container co-locates the API, scheduler, publisher, worker, and
+reaper. **That is a hosting constraint, not Fluxion's normal topology:** these
+runtimes are designed to be deployed independently.
+
+The Demo Playground can start only two server-defined, side-effect-free
+workflows; it does not accept arbitrary workflow JSON or user code:
+
+| Workflow | What it demonstrates |
+| --- | --- |
+| Document Processing Pipeline | Validation, parallel text/metadata extraction, fan-in aggregation, summary generation, and clearly labelled demo persistence. |
+| Resilient ETL Pipeline | Parallel cleaning/feature computation and a deliberately simulated transient validation failure that succeeds on Fluxion's durable second attempt. |
+
+![Fluxion Demo Playground](docs/assets/demo-playground.png)
+
+The Playground's server route accepts only these predefined identifiers. It
+does not accept arbitrary workflow definitions, task code, or browser-exposed
+control-plane credentials.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    U[Dashboard / Client / SDK] --> API[FastAPI control plane]
+    API --> PG[(PostgreSQL<br/>canonical state)]
+    SCH[Scheduler] --> PG
+    PG --> OUT[Transactional<br/>dispatch outbox]
+    OUT --> PUB[Publisher]
+    PUB --> REDIS[(Redis<br/>transport)]
+    REDIS --> WORKERS[Workers]
+    WORKERS --> PG
+    PG --> SCH
+    REAPER[Lease reaper] --> PG
+    COORD[Run coordinator] --> PG
+    REC[Dispatch reconciler] --> PG
+    PG --> SSE[SSE run events]
+    PG --> AUDIT[Audit / metrics / logs]
+```
+
+PostgreSQL is the source of truth. Redis delivery is intentionally replaceable
+and at least once; workers validate every message against durable state before
+claiming an attempt. See the [full architecture](docs/ARCHITECTURE.md) for
+recovery, coordination, schedules, triggers, webhooks, and retention.
+
+## How a task moves through Fluxion
+
+```mermaid
+sequenceDiagram
+    participant C as Client/API
+    participant PG as PostgreSQL
+    participant S as Scheduler
+    participant P as Publisher
+    participant R as Redis
+    participant W as Worker
+
+    C->>PG: Persist run and task state
+    S->>PG: Create DISPATCHED attempt + outbox intent (one transaction)
+    P->>R: Publish durable dispatch intent
+    P->>PG: Acknowledge publication after Redis succeeds
+    W->>PG: Validate message and claim fenced worker lease
+    W->>W: Execute registered task callable
+    W->>PG: Persist result and terminal state
+    PG-->>S: Downstream dependencies become schedulable
+```
+
+The outbox protects the PostgreSQL-to-Redis handoff, not external side effects.
+If a worker loses ownership after a task may have run, Fluxion records an
+`INTERRUPTED` attempt and waits for an administrator to choose `RETRY` or
+`FAIL`; it never auto-retries that ambiguity.
+
+## Performance
+
+**Verified local end-to-end benchmark — not a hosted-production capacity
+claim.** The following single-task workload ran on Windows with Python 3.11.9,
+16 workers, and one worker loop per worker. It exercised workflow submission
+through durable completion, including scheduler, outbox, Redis, workers, and
+PostgreSQL correctness checks.
+
+| Metric | Result |
+| --- | ---: |
+| Runs / task executions | 100,000 / 100,000 |
+| Successful / failed / interrupted / cancelled | 100,000 / 0 / 0 / 0 |
+| Submission duration | 739.993 s |
+| Execution duration | 4,341.131 s |
+| Submission-to-completion duration | 5,081.124 s |
+| Execution throughput | 23.035 tasks/s |
+| Submission-to-completion throughput | 19.681 tasks/s |
+| End-to-end latency (p50 / p95 / p99) | 2.338 s / 5.474 s / 5.990 s |
+| Maximum Redis queue depth | 82 |
+| Correctness validation | PASS |
+
+Benchmark commit: [`bb9cee9`](https://github.com/ayushxt25/fluxion/commit/bb9cee9f4b29d698f0dc9f76e5e5273fe6ec628a).
+The scheduler was the dominant bottleneck in this environment. The publisher's
+active-time publication rate was about 326 tasks/s, which is a component
+measurement rather than end-to-end system throughput. Reproduce or compare
+results with the [benchmark methodology and captured runs](docs/BENCHMARK_RESULTS.md).
+
+## Reliability and correctness
+
+Fluxion favors explicit, durable state transitions over optimistic claims:
+
+- PostgreSQL is canonical; Redis is task transport only.
+- Dispatch and execution are **at least once**, never claimed as exactly once.
+- Task idempotency keys remain stable across retries; attempt identities change.
+- Worker and coordinator fencing prevent stale owners from committing state.
+- Reconciliation repairs eligible lost dispatches without creating a new attempt.
+- Pending ambiguity interventions protect execution evidence from retention.
+- Correctness validation is part of the benchmark result; a violated invariant
+  makes the benchmark invalid rather than merely slower.
 
 ## Core capabilities
 
-- DAG workflows with immutable revisions, durable task attempts, and results
-- PostgreSQL canonical state with transactional outbox and Redis transport
-- At-least-once dispatch with worker and coordinator lease fencing
-- Retries, lost-message reconciliation, and explicit ambiguous-work recovery
-- Schedules, event triggers, signed webhooks, retention, metrics, and SDKs
-- Production-style runtimes, startup preflight, and benchmark tooling
+- Durable DAG runs, task attempts/results, workflow input mappings, and
+  immutable workflow revisions
+- Scheduler, transactional outbox, publisher, Redis workers, retry/backoff,
+  cancellation, reconciliation, and distributed coordination
+- Worker leases/fencing plus conservative interrupted-work intervention
+- Schedules, event triggers, signed webhooks, retention, and SSE run events
+- FastAPI control plane, typed sync/async SDK, JWT/RBAC, rate limiting, audit,
+  structured logs, Prometheus-compatible metrics, and startup preflight
 
-Read the [architecture](docs/ARCHITECTURE.md),
-[deployment guide](docs/DEPLOYMENT.md), [1.0 release notes](docs/RELEASE_1_0.md),
-and [benchmark-result methodology](docs/BENCHMARK_RESULTS.md) for details.
+## Detailed reference
+
+The sections below are the operational reference. For focused reading, start
+with [architecture](docs/ARCHITECTURE.md), [deployment](docs/DEPLOYMENT.md),
+[benchmark results](docs/BENCHMARK_RESULTS.md), and the [release notes](docs/RELEASE_1_0.md).
 
 ## Python SDK
 
@@ -134,6 +273,23 @@ for now, and persistence failures never alter canonical task success or failure.
 
 ## Quick start
 
+The fastest way to see the distributed path locally is Docker Compose. It
+starts PostgreSQL, Redis, a one-shot migration job, and the API, scheduler,
+publisher, reaper, and worker roles:
+
+```bash
+export JWT_SECRET='local-development-secret-not-for-production'
+docker compose up -d --build
+curl http://127.0.0.1:8001/ready
+docker compose run --rm --no-deps api fluxion-demo --api-url http://api:8000
+```
+
+The dashboard lives in [`frontend/`](frontend/README.md). Start it separately
+after setting its server-only API configuration; it proxies browser requests so
+the backend does not need broad development CORS.
+
+For a manual Python setup, use Python 3.11 or later:
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
@@ -150,8 +306,8 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
-Copy `.env.example` to `.env` for local development configuration. Use Python
-3.11 or later. Fluxion requires reachable PostgreSQL and Redis.
+Copy `.env.example` to `.env` for local development configuration. Fluxion
+requires reachable PostgreSQL and Redis.
 
 For local persistence, create PostgreSQL databases matching your configured
 `DATABASE_URL` and `TEST_DATABASE_URL`, then run:
@@ -294,6 +450,11 @@ unlocks only after both complete. Each task has a small fixed nonblocking delay
 so its real state transitions are observable through the dashboard SSE view.
 The demo tasks have no external side effects and are intended only for public
 demonstration.
+
+![Completed Document Processing run](docs/assets/document-run.png)
+
+_A completed document demo showing the fan-out/fan-in DAG and durable task
+states in the live dashboard._
 
 ## Task Results
 
@@ -528,12 +689,11 @@ DATABASE_URL=postgresql+asyncpg://localhost/fluxion_bench fluxion benchmark \
 
 The JSON result contains workload/configuration, total executions, throughput,
 latency percentiles, maximum queue depth, and correctness violations. Invalid
-canonical state prevents a successful result. Benchmark results depend on the machine, PostgreSQL/Redis
-configuration, worker count, worker concurrency, and workload shape; Fluxion
-does not publish fixed throughput claims.
-
-Use [benchmark result methodology](docs/BENCHMARK_RESULTS.md) to record a
-measured run without treating a template as a performance claim.
+canonical state prevents a successful result. Results depend on the machine,
+PostgreSQL/Redis configuration, worker count, worker concurrency, and workload
+shape. See [benchmark results](docs/BENCHMARK_RESULTS.md) for the captured 10k
+and 100k local runs, methodology, and the distinction between component timing
+and end-to-end throughput.
 
 ## Retention and Lifecycle Management
 
