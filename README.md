@@ -11,8 +11,8 @@
 Fluxion separates canonical execution state from delivery transport: PostgreSQL
 stores workflow state, attempts, results, leases, and outbox intent; Redis
 carries dispatch messages to independently deployable workers. It is a
-portfolio project focused on the system-design boundaries that matter when work
-can be retried, duplicated, interrupted, or recovered.
+system designed around the correctness boundaries that matter when work can be
+retried, duplicated, interrupted, or recovered.
 
 [![Frontend](https://img.shields.io/badge/Frontend-Live-22c7df?style=flat-square)](https://fluxion-m5h1l4q1e-valerian1.vercel.app/)
 [![Backend](https://img.shields.io/badge/Backend-Live-2f855a?style=flat-square)](https://fluxion-c153.onrender.com)

@@ -145,12 +145,12 @@ region name: its `aws-<index>-<region>.pooler.supabase.com` index is assigned
 by Supabase. A stale or guessed index produces a DNS failure before Fluxion,
 SQLAlchemy, asyncpg, TLS, or credentials are involved.
 
-Set `sslmode=require` in the URL query string when the copied Supabase URL does
-not already include it (for example, append `?sslmode=require`). asyncpg accepts
-that URL option through SQLAlchemy; Fluxion does not add platform-specific SSL
-parameters or disable TLS. Use `sslmode=verify-full` only when the Supabase CA
-certificate is also mounted and referenced with `sslrootcert`. If the password
-has URL-reserved characters, percent-encode it before storing the URL in Render.
+Use the copied Session Pooler URL with the `postgresql+asyncpg` scheme as-is;
+the deployed Fluxion SQLAlchemy/asyncpg configuration does not require an
+`sslmode` query parameter. Do not append `?sslmode=require`: that option reaches
+asyncpg as an unsupported connection keyword in this configuration. Fluxion does
+not add platform-specific SSL parameters or disable TLS. If the password has
+URL-reserved characters, percent-encode it before storing the URL in Render.
 Store the full URL only in Render's secret environment configuration.
 
 ## Health, readiness, and shutdown
